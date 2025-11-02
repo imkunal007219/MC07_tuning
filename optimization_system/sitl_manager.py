@@ -54,17 +54,22 @@ class SITLManager:
         # Determine ArduPilot path
         if ardupilot_path is None:
             # Try to find it in common locations
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(script_dir)
             possible_paths = [
-                os.path.expanduser("~/ardupilot"),
-                os.path.join(os.getcwd(), "ardupilot"),
-                "/home/kunal/Documents/WORK/mc07 sitl/ardupilot"
+                os.path.join(project_root, "ardupilot"),  # Project root
+                os.path.expanduser("~/ardupilot"),         # Home directory
+                os.path.join(os.getcwd(), "ardupilot"),   # Current working directory
             ]
             for path in possible_paths:
                 if os.path.exists(path):
                     self.ardupilot_path = path
                     break
             else:
-                raise FileNotFoundError("ArduPilot directory not found")
+                raise FileNotFoundError(
+                    f"ArduPilot directory not found. Searched in:\n" +
+                    "\n".join(f"  - {p}" for p in possible_paths)
+                )
         else:
             self.ardupilot_path = ardupilot_path
 

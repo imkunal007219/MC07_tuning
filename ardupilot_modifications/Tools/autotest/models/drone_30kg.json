@@ -1,65 +1,32 @@
-# 30kg Heavy-lift Drone Model
-# Generic parameters for 30kg total takeoff weight
-# These parameters will be updated with actual design specifications
-
 {
-    # total vehicle mass (kg)
-    "mass" : 30.0,
+    "_comment1": "30kg Heavy-lift Drone Model",
+    "_comment2": "Generic parameters for 30kg total takeoff weight",
+    "_comment3": "These parameters will be updated with actual design specifications",
 
-    # vehicle diameter (m) - estimated for medium-large frame
-    "diagonal_size" : 1.5,
+    "mass": 30.0,
+    "diagonal_size": 1.5,
 
-    # Reference parameters from hover/flight testing
-    # These should be calibrated with actual flight data
-    "refSpd" : 15.0,    # m/s - typical cruise speed
-    "refAngle" : 25.0,  # degrees - pitch angle at cruise
-    "refVoltage" : 44.4, # volts - 12S LiPo nominal (3.7V * 12)
-    "refCurrent" : 45.0, # Amps - estimated cruise current
-    "refAlt" : 50,      # meters AMSL - reference altitude
-    "refTempC" : 25,    # degrees C - standard temperature
-    "refBatRes" : 0.02, # battery resistance (ohms)
+    "refSpd": 15.0,
+    "refAngle": 25.0,
+    "refVoltage": 44.4,
+    "refCurrent": 45.0,
+    "refAlt": 50,
+    "refTempC": 25,
+    "refBatRes": 0.02,
 
-    # full battery voltage (12S LiPo fully charged: 4.2V * 12)
-    "maxVoltage" : 50.4,
+    "maxVoltage": 50.4,
+    "battCapacityAh": 30,
+    "propExpo": 0.55,
+    "refRotRate": 90,
+    "hoverThrOut": 0.5,
 
-    # full battery capacity in Amp-hours
-    # Estimated for ~20-25 minute flight time with 30kg payload
-    "battCapacityAh" : 30,
+    "pwmMin": 1000,
+    "pwmMax": 2000,
+    "spin_min": 0.15,
+    "spin_max": 0.95,
+    "slew_max": 60,
 
-    # MOT_THST_EXPO - motor thrust exponent
-    "propExpo" : 0.55,
-
-    # approximate maximum yaw rate in deg/sec
-    "refRotRate" : 90,
-
-    # hover throttle from 0 to 1
-    # Higher for heavy-lift (estimated 50% throttle for hover)
-    "hoverThrOut" : 0.5,
-
-    # MOT_PWM_MIN
-    "pwmMin" : 1000,
-
-    # MOT_PWM_MAX
-    "pwmMax" : 2000,
-
-    # MOT_SPIN_MIN
-    "spin_min" : 0.15,
-
-    # MOT_SPIN_MAX
-    "spin_max" : 0.95,
-
-    # maximum motor slew rate (percent/sec), or zero to disable
-    "slew_max" : 60,
-
-    # total effective disc area in sq m
-    # Estimated for 4 motors with 20-22 inch props
-    # Area = π * (0.254)^2 * 4 = 0.81 sq m
-    "disc_area" : 0.85,
-
-    # momentum drag coefficient
-    # ratio of momentum drag relative to ducted rotor
-    "mdrag_coef" : 0.12,
-
-    # number of motors (quadcopter X configuration)
-    "num_motors" : 4
+    "disc_area": 0.85,
+    "mdrag_coef": 0.12,
+    "num_motors": 4
 }
