@@ -39,10 +39,7 @@ logs/*.log
 *.pkl
 *.hdf5
 
-# ArduPilot (nested git repository - exclude entirely)
-ardupilot/
-
-# ArduPilot build artifacts
+# ArduPilot build artifacts (exclude build outputs, but include source)
 ardupilot/build/
 ardupilot/.waf-*
 ardupilot/.lock-waf*

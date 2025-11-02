@@ -1,0 +1,107 @@
+# Parameter file for 30kg Heavy-lift Drone
+# Quadcopter X configuration (4 motors)
+# Generic parameters - to be updated with actual design values
+
+# Frame configuration
+FRAME_CLASS     1    # Quad
+FRAME_TYPE      1    # X configuration
+
+# Failsafe settings
+FS_THR_ENABLE   1
+
+# Fence settings (safety boundary)
+FENCE_RADIUS    200
+
+# RC input ranges
+RC1_MAX         2000.000000
+RC1_MIN         1000.000000
+RC1_TRIM        1500.000000
+RC2_MAX         2000.000000
+RC2_MIN         1000.000000
+RC2_TRIM        1500.000000
+RC3_MAX         2000.000000
+RC3_MIN         1000.000000
+RC3_TRIM        1500.000000
+RC4_MAX         2000.000000
+RC4_MIN         1000.000000
+RC4_TRIM        1500.000000
+RC5_MAX         2000.000000
+RC5_MIN         1000.000000
+RC5_TRIM        1500.000000
+RC6_MAX         2000.000000
+RC6_MIN         1000.000000
+RC6_TRIM        1500.000000
+RC7_MAX         2000.000000
+RC7_MIN         1000.000000
+RC7_OPTION      7
+RC7_TRIM        1500.000000
+RC8_MAX         2000.000000
+RC8_MIN         1000.000000
+RC8_TRIM        1500.000000
+
+# Flight modes
+FLTMODE1        7    # Circle
+FLTMODE2        9    # Land
+FLTMODE3        6    # RTL
+FLTMODE4        3    # Auto
+FLTMODE5        5    # Loiter
+FLTMODE6        0    # Stabilize
+
+# Motor parameters for heavy-lift configuration
+MOT_THST_EXPO   0.55    # Thrust curve expo
+MOT_THST_HOVER  0.5     # Estimated hover throttle (50% for 30kg)
+MOT_BAT_VOLT_MIN 36.0   # 12S LiPo minimum (3.0V * 12)
+MOT_BAT_VOLT_MAX 50.4   # 12S LiPo maximum (4.2V * 12)
+MOT_PWM_MIN     1000
+MOT_PWM_MAX     2000
+MOT_SPIN_MIN    0.15
+MOT_SPIN_MAX    0.95
+MOT_SPOOL_TIME  0.5     # Spool-up time for larger motors
+
+# Battery monitoring
+BATT_MONITOR    4
+BATT_CAPACITY   30000   # 30Ah battery capacity in mAh
+
+# Rate controller tuning (conservative for heavy payload)
+ATC_RAT_RLL_P   0.10
+ATC_RAT_RLL_I   0.08
+ATC_RAT_RLL_D   0.004
+ATC_RAT_PIT_P   0.10
+ATC_RAT_PIT_I   0.08
+ATC_RAT_PIT_D   0.004
+ATC_RAT_YAW_P   0.25
+ATC_RAT_YAW_I   0.02
+
+# Position controller
+PSC_VELXY_P     0.8
+PSC_VELXY_I     0.4
+PSC_VELXY_D     0.15
+
+# Altitude controller
+PSC_ACCZ_P      0.20
+PSC_ACCZ_I      0.40
+
+# Compass offsets (will be calibrated)
+COMPASS_OFS_X   5
+COMPASS_OFS_Y   13
+COMPASS_OFS_Z   -18
+
+# INS calibration - small offsets so INS is recognized as calibrated
+INS_ACCOFFS_X   0.001
+INS_ACCOFFS_Y   0.001
+INS_ACCOFFS_Z   0.001
+INS_ACCSCAL_X   1.001
+INS_ACCSCAL_Y   1.001
+INS_ACCSCAL_Z   1.001
+INS_ACC2OFFS_X  0.001
+INS_ACC2OFFS_Y  0.001
+INS_ACC2OFFS_Z  0.001
+INS_ACC2SCAL_X  1.001
+INS_ACC2SCAL_Y  1.001
+INS_ACC2SCAL_Z  1.001
+
+# Disable simulated sensor noise for testing
+SIM_BARO_RND    0
+
+# Landing detection
+LAND_SPEED      50      # cm/s - slower landing for heavy drone
