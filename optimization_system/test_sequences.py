@@ -38,6 +38,96 @@ class TestSequence:
         self.timeout = timeout
         self.start_time = None
 
+    def _convert_to_tuple(self, result: TestResult) -> Tuple[bool, Dict]:
+        """
+        Convert TestResult to (success, telemetry) tuple format
+        This format is expected by the optimizer and performance evaluator
+        """
+        # Convert test data to proper telemetry format
+        telemetry = {}
+
+        if 'positions' in result.test_data and result.test_data['positions']:
+            positions = result.test_data['positions']
+            # Extract time series data
+            telemetry['time'] = np.array([p[0] for p in positions])
+            telemetry['latitude'] = np.array([p[1] for p in positions]) if len(positions[0]) > 1 else None
+            telemetry['longitude'] = np.array([p[2] for p in positions]) if len(positions[0]) > 2 else None
+            telemetry['altitude'] = np.array([p[3] for p in positions]) if len(positions[0]) > 3 else None
+
+        if 'attitudes' in result.test_data and result.test_data['attitudes']:
+            attitudes = result.test_data['attitudes']
+            if 'time' not in telemetry:
+                telemetry['time'] = np.array([a[0] for a in attitudes])
+            telemetry['attitude'] = np.array([[a[1], a[2], a[3]] for a in attitudes])  # roll, pitch, yaw
+            telemetry['roll'] = np.array([a[1] for a in attitudes])
+            telemetry['pitch'] = np.array([a[2] for a in attitudes])
+            telemetry['yaw'] = np.array([a[3] for a in attitudes])
+
+        if 'velocities' in result.test_data and result.test_data['velocities']:
+            velocities = result.test_data['velocities']
+            telemetry['velocity'] = np.array([[v[1], v[2], v[3]] for v in velocities])  # vx, vy, vz
+            telemetry['vx'] = np.array([v[1] for v in velocities])
+            telemetry['vy'] = np.array([v[2] for v in velocities])
+            telemetry['vz'] = np.array([v[3] for v in velocities])
+
+        if 'responses' in result.test_data:
+            responses = result.test_data['responses']
+            if 'time' not in telemetry:
+                telemetry['time'] = np.array([r[0] for r in responses])
+            telemetry['response_value'] = np.array([r[1] for r in responses])
+
+        # Add target values if available
+        if 'target_value' in result.test_data:
+            target = result.test_data['target_value']
+            telemetry['attitude_target'] = np.full_like(telemetry.get('attitude', np.array([0])), target)
+            telemetry['altitude_target'] = np.full_like(telemetry.get('altitude', np.array([0])), target)
+
+        # Add performance metrics
+        telemetry['metrics'] = {
+            'max_error': result.max_error,
+            'rms_error': result.rms_error,
+            'overshoot': result.overshoot,
+            'settling_time': result.settling_time,
+            'rise_time': result.rise_time,
+            'oscillations': result.oscillations,
+            'crashed': result.crashed,
+            'duration': result.duration
+        }
+
+        # Add motor saturation data (placeholder)
+        if 'time' in telemetry:
+            telemetry['motor_outputs'] = np.ones((len(telemetry['time']), 4)) * 0.5  # Placeholder
+
+        # Add rates (placeholder - should be collected from actual telemetry)
+        if 'attitude' in telemetry:
+            # Approximate rates from attitude differences
+            if len(telemetry['attitude']) > 1:
+                dt = np.diff(telemetry['time'])
+                attitude_diff = np.diff(telemetry['attitude'], axis=0)
+                rates = attitude_diff / dt[:, np.newaxis]
+                # Pad to match length
+                rates = np.vstack([rates, rates[-1]])
+                telemetry['rates'] = rates
+                telemetry['roll_rate'] = rates[:, 0]
+                telemetry['pitch_rate'] = rates[:, 1]
+                telemetry['yaw_rate'] = rates[:, 2]
+            else:
+                telemetry['rates'] = np.zeros_like(telemetry['attitude'])
+                telemetry['roll_rate'] = np.zeros(len(telemetry['attitude']))
+                telemetry['pitch_rate'] = np.zeros(len(telemetry['attitude']))
+                telemetry['yaw_rate'] = np.zeros(len(telemetry['attitude']))
+
+        # Add position targets (for hover test, target is initial position)
+        if 'latitude' in telemetry and telemetry['latitude'] is not None:
+            telemetry['position_target'] = np.array([
+                [telemetry['latitude'][0], telemetry['longitude'][0], telemetry['altitude'][0]]
+            ] * len(telemetry['time']))
+            telemetry['position'] = np.column_stack([
+                telemetry['latitude'], telemetry['longitude'], telemetry['altitude']
+            ])
+
+        return (not result.crashed and result.success, telemetry)
+
     def wait_heartbeat(self):
         """Wait for heartbeat from vehicle"""
         self.connection.wait_heartbeat()
@@ -139,7 +229,12 @@ class HoverStabilityTest(TestSequence):
         self.test_duration = duration
         self.altitude = altitude
 
-    def run(self) -> TestResult:
+    def run(self) -> Tuple[bool, Dict]:
+        """Execute hover stability test and return (success, telemetry) tuple"""
+        result = self._run_test()
+        return self._convert_to_tuple(result)
+
+    def _run_test(self) -> TestResult:
         """Execute hover stability test"""
         logger.info(f"Running hover stability test for {self.test_duration}s at {self.altitude}m")
 

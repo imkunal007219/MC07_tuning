@@ -11,7 +11,7 @@ from datetime import datetime
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import *
+import config
 from sitl_manager import SITLManager
 from optimizer import GeneticOptimizer, BayesianOptimizer
 from performance_evaluator import PerformanceEvaluator
@@ -40,8 +40,8 @@ def main():
 
     # Setup logging
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_file = f"{LOGGING_CONFIG['log_dir']}/optimization_{timestamp}.log"
-    logger = setup_logging(log_file, LOGGING_CONFIG['log_level'])
+    log_file = f"{config.LOGGING_CONFIG['log_dir']}/optimization_{timestamp}.log"
+    logger = setup_logging(log_file, config.LOGGING_CONFIG['log_level'])
 
     logger.info("="*80)
     logger.info("AUTOMATED DRONE TUNING SYSTEM STARTED")
@@ -68,7 +68,7 @@ def main():
             sitl_manager=sitl_manager,
             evaluator=performance_evaluator,
             max_generations=args.generations,
-            population_size=OPTIMIZATION_CONFIG['population_size']
+            population_size=config.OPTIMIZATION_CONFIG['population_size']
         )
     else:
         optimizer = BayesianOptimizer(
@@ -88,10 +88,10 @@ def main():
 
     for phase_name in phases:
         logger.info("\n" + "="*80)
-        logger.info(f"STARTING PHASE: {OPTIMIZATION_PHASES[phase_name]['name']}")
+        logger.info(f"STARTING PHASE: {config.OPTIMIZATION_PHASES[phase_name]['name']}")
         logger.info("="*80)
 
-        phase_config = OPTIMIZATION_PHASES[phase_name]
+        phase_config = config.OPTIMIZATION_PHASES[phase_name]
 
         # Run optimization
         best_params, best_fitness, convergence_history = optimizer.optimize(
@@ -109,7 +109,7 @@ def main():
         }
 
         # Save intermediate results
-        checkpoint_file = f"{LOGGING_CONFIG['log_dir']}/checkpoint_{phase_name}_{timestamp}.pkl"
+        checkpoint_file = f"{config.LOGGING_CONFIG['log_dir']}/checkpoint_{phase_name}_{timestamp}.pkl"
         save_results(checkpoint_file, all_results[phase_name])
         logger.info(f"\nCheckpoint saved to: {checkpoint_file}")
 
@@ -144,11 +144,11 @@ def main():
         'timestamp': timestamp,
     }
 
-    output_file = f"{LOGGING_CONFIG['log_dir']}/final_results_{timestamp}.pkl"
+    output_file = f"{config.LOGGING_CONFIG['log_dir']}/final_results_{timestamp}.pkl"
     save_results(output_file, final_output)
 
     # Generate parameter file
-    param_file = f"{LOGGING_CONFIG['log_dir']}/optimized_params_{timestamp}.param"
+    param_file = f"{config.LOGGING_CONFIG['log_dir']}/optimized_params_{timestamp}.param"
     generate_param_file(final_params, param_file)
 
     logger.info("\n" + "="*80)
@@ -174,7 +174,7 @@ def generate_param_file(parameters, output_file):
         f.write("#\n\n")
 
         # Group by category
-        for phase_name, phase_config in OPTIMIZATION_PHASES.items():
+        for phase_name, phase_config in config.OPTIMIZATION_PHASES.items():
             f.write(f"# {phase_config['name']}\n")
             for param in phase_config['parameters']:
                 if param in parameters:

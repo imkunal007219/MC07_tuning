@@ -3,6 +3,10 @@ Configuration file for automated drone tuning system
 """
 
 import numpy as np
+import os
+
+# Get project root directory (parent of optimization_system)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ============================================================================
 # DRONE PHYSICAL PARAMETERS
@@ -249,7 +253,7 @@ TEST_SEQUENCES = {
 # SITL CONFIGURATION
 # ============================================================================
 SITL_CONFIG = {
-    'ardupilot_path': '/home/kunal/Documents/WORK/mc07 sitl/ardupilot',
+    'ardupilot_path': os.path.join(PROJECT_ROOT, 'ardupilot'),
     'vehicle': 'ArduCopter',
     'frame': 'quad',
     'home_location': '-35.363261,149.165230,584,353',  # Canberra
@@ -274,7 +278,7 @@ MAVLINK_CONFIG = {
 # LOGGING CONFIGURATION
 # ============================================================================
 LOGGING_CONFIG = {
-    'log_dir': '/home/kunal/Documents/WORK/mc07 sitl/logs',
+    'log_dir': os.path.join(PROJECT_ROOT, 'logs'),
     'save_all_telemetry': True,
     'save_performance_metrics': True,
     'save_crash_logs': True,
