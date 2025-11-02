@@ -317,7 +317,8 @@ class PerformanceEvaluator:
 
             return t_90 - t_10
 
-        except:
+        except (ValueError, IndexError, TypeError, ZeroDivisionError) as e:
+            logger.debug(f"Error calculating rise time: {e}")
             return 999.0
 
     def _calculate_settling_time(self, time: np.ndarray, response: np.ndarray,
@@ -336,7 +337,8 @@ class PerformanceEvaluator:
             settle_idx = exceed_indices[-1]
             return time[settle_idx] - time[0]
 
-        except:
+        except (ValueError, IndexError, TypeError, ZeroDivisionError) as e:
+            logger.debug(f"Error calculating settling time: {e}")
             return 999.0
 
     def _calculate_overshoot(self, response: np.ndarray,
@@ -354,7 +356,8 @@ class PerformanceEvaluator:
 
             return max(0, overshoot)
 
-        except:
+        except (ValueError, IndexError, TypeError, ZeroDivisionError) as e:
+            logger.debug(f"Error calculating overshoot: {e}")
             return 100.0
 
     def _calculate_steady_state_error(self, response: np.ndarray,
@@ -367,7 +370,8 @@ class PerformanceEvaluator:
             error = abs(np.mean(response) - target)
             return (error / abs(target)) * 100
 
-        except:
+        except (ValueError, IndexError, TypeError, ZeroDivisionError) as e:
+            logger.debug(f"Error calculating steady state error: {e}")
             return 100.0
 
     def _detect_oscillations(self, time: np.ndarray,
@@ -437,7 +441,8 @@ class PerformanceEvaluator:
         """Calculate RMSE between actual and target"""
         try:
             return np.sqrt(np.mean((actual - target)**2))
-        except:
+        except (ValueError, IndexError, TypeError, ZeroDivisionError) as e:
+            logger.debug(f"Error calculating RMSE: {e}")
             return 999.0
 
     def _calculate_avg_power(self, motor_outputs: np.ndarray) -> float:
@@ -445,7 +450,8 @@ class PerformanceEvaluator:
         try:
             # Simplified power model: P ~ motor_output^2
             return np.mean(np.sum(motor_outputs**2, axis=1))
-        except:
+        except (ValueError, IndexError, TypeError, ZeroDivisionError) as e:
+            logger.debug(f"Error calculating average power: {e}")
             return 0.0
 
     def _calculate_power_efficiency(self, motor_outputs: np.ndarray,
@@ -456,7 +462,8 @@ class PerformanceEvaluator:
             if total_power < 0.001:
                 return 0.0
             return abs(altitude_change) / total_power
-        except:
+        except (ValueError, IndexError, TypeError, ZeroDivisionError) as e:
+            logger.debug(f"Error calculating power efficiency: {e}")
             return 0.0
 
     def _check_safety_constraints(self, metrics: PerformanceMetrics) -> bool:

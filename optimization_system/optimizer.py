@@ -173,6 +173,29 @@ class GeneticOptimizer(BaseOptimizer):
                     self.toolbox.mutate(mutant)
                     del mutant.fitness.values
 
+            # Elite preservation: ensure best individual survives
+            # Clone the elite before replacing population
+            if len(hof) > 0:
+                elite = self.toolbox.clone(hof[0])
+
+                # Replace worst individual with elite to guarantee best solution persists
+                # Find the individual with worst fitness (or no fitness yet)
+                worst_idx = 0
+                worst_fitness = float('inf')
+
+                for idx, ind in enumerate(offspring):
+                    if not ind.fitness.valid:
+                        # Individual hasn't been evaluated yet - replace it
+                        worst_idx = idx
+                        break
+                    elif ind.fitness.values[0] < worst_fitness:
+                        worst_fitness = ind.fitness.values[0]
+                        worst_idx = idx
+
+                # Inject elite into population
+                offspring[worst_idx] = elite
+                logger.debug(f"Elite preserved with fitness: {elite.fitness.values[0]:.4f}")
+
             # Replace population
             pop[:] = offspring
 

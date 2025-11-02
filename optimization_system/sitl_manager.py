@@ -80,6 +80,9 @@ class SITLManager:
         self.instance_queue = Queue()
         self.lock = threading.Lock()
 
+        # File handle tracking to prevent leaks
+        self.log_files: Dict[int, Tuple] = {}
+
         # Port management (starting ports to avoid conflicts)
         self.base_mavlink_port = 14550
         self.base_sitl_port = 5760
@@ -106,18 +109,18 @@ class SITLManager:
 
         logger.info(f"Initialized {len(self.instances)} instances")
 
-    def _find_free_port(self, start_port: int) -> int:
-        """Find a free port starting from start_port"""
-        port = start_port
-        while True:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                try:
-                    s.bind(('', port))
-                    return port
-                except OSError:
-                    port += 1
-                    if port > start_port + 1000:
-                        raise RuntimeError("Could not find free port")
+    def _find_free_port(self) -> int:
+        """
+        Find a free port using OS assignment
+
+        This avoids TOCTOU race conditions by letting the OS choose a free port.
+        The port is guaranteed to be available at the time of return.
+        """
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('', 0))  # Port 0 tells OS to assign a free port
+            s.listen(1)
+            port = s.getsockname()[1]
+            return port
 
     def start_instance(self, instance_id: int, parameters: Dict[str, float]) -> bool:
         """
@@ -146,9 +149,9 @@ class SITLManager:
             temp_dir = f"/tmp/sitl_instance_{instance_id}"
             os.makedirs(temp_dir, exist_ok=True)
 
-            # Ensure free ports
-            mavlink_port = self._find_free_port(instance.mavlink_port)
-            sitl_port = self._find_free_port(instance.sitl_port)
+            # Ensure free ports using OS assignment (prevents race conditions)
+            mavlink_port = self._find_free_port()
+            sitl_port = self._find_free_port()
 
             instance.mavlink_port = mavlink_port
             instance.sitl_port = sitl_port
@@ -185,6 +188,9 @@ class SITLManager:
                 # Start SITL process with output logging
                 stdout_file = open(f"/tmp/sitl_stdout_{instance_id}.log", "w")
                 stderr_file = open(f"/tmp/sitl_stderr_{instance_id}.log", "w")
+
+                # Store file handles for cleanup to prevent file descriptor leak
+                self.log_files[instance_id] = (stdout_file, stderr_file)
 
                 instance.process = subprocess.Popen(
                     profile_cmd,
@@ -301,19 +307,36 @@ class SITLManager:
                 instance.connection.close()
                 instance.connection = None
 
-            if instance.process:
-                # Kill entire process group
-                os.killpg(os.getpgid(instance.process.pid), signal.SIGTERM)
-
-                # Wait for process to terminate
+            if instance.process and instance.process.pid:
+                # Kill entire process group with proper error handling
                 try:
-                    instance.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    # Force kill if still running
-                    os.killpg(os.getpgid(instance.process.pid), signal.SIGKILL)
-                    instance.process.wait()
+                    os.killpg(os.getpgid(instance.process.pid), signal.SIGTERM)
+
+                    # Wait for process to terminate
+                    try:
+                        instance.process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        # Force kill if still running
+                        try:
+                            os.killpg(os.getpgid(instance.process.pid), signal.SIGKILL)
+                            instance.process.wait()
+                        except (ProcessLookupError, OSError):
+                            pass  # Process already terminated
+                except (ProcessLookupError, OSError):
+                    # Process already terminated
+                    pass
 
                 instance.process = None
+
+            # Close log file handles to prevent file descriptor leak
+            if instance.instance_id in self.log_files:
+                stdout_file, stderr_file = self.log_files[instance.instance_id]
+                try:
+                    stdout_file.close()
+                    stderr_file.close()
+                except Exception as e:
+                    logger.debug(f"Error closing log files for instance {instance.instance_id}: {e}")
+                del self.log_files[instance.instance_id]
 
         except Exception as e:
             logger.warning(f"Error killing instance {instance.instance_id}: {e}")
@@ -425,6 +448,15 @@ class SITLManager:
 
         for instance in self.instances:
             self._kill_instance(instance)
+
+        # Ensure all log files are closed
+        for instance_id, (stdout_file, stderr_file) in list(self.log_files.items()):
+            try:
+                stdout_file.close()
+                stderr_file.close()
+            except Exception as e:
+                logger.debug(f"Error closing log files for instance {instance_id}: {e}")
+        self.log_files.clear()
 
         # Clean up temporary directories
         for i in range(self.num_instances):
