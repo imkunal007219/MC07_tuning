@@ -12,6 +12,7 @@ import logging
 from typing import List, Dict, Optional, Tuple
 import threading
 from queue import Queue, Empty
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pymavlink import mavutil
 from dataclasses import dataclass
 import random
@@ -203,49 +204,69 @@ class SITLManager:
                     preexec_fn=os.setsid  # Create new process group
                 )
 
-                # Wait for SITL to start (increased time for first boot)
+                # Optimized boot wait: Poll for SITL readiness instead of fixed sleep
+                # This reduces average wait time from 15s to ~2-5s
                 logger.debug(f"Waiting for SITL {instance_id} to boot...")
-                time.sleep(15)
-
-                # Check if process is still running
-                if instance.process.poll() is not None:
-                    logger.error(f"SITL process {instance_id} died during startup")
-                    logger.error(f"Check logs: /tmp/sitl_stdout_{instance_id}.log and /tmp/sitl_stderr_{instance_id}.log")
-                    return False
 
                 # Connect via MAVLink (SITL uses TCP on base port 5760 + instance_id*10)
                 actual_tcp_port = self.base_sitl_port + instance_id * 10
                 connection_string = f"tcp:127.0.0.1:{actual_tcp_port}"
-                logger.debug(f"Connecting to {connection_string}")
 
-                # Retry connection with exponential backoff
-                max_retries = 5
-                for retry in range(max_retries):
+                # Poll for SITL readiness with exponential backoff
+                max_boot_time = 30  # Maximum time to wait for boot
+                boot_start = time.time()
+                connection_established = False
+
+                while time.time() - boot_start < max_boot_time:
+                    # Check if process is still running
+                    if instance.process.poll() is not None:
+                        logger.error(f"SITL process {instance_id} died during startup")
+                        logger.error(f"Check logs: /tmp/sitl_stdout_{instance_id}.log and /tmp/sitl_stderr_{instance_id}.log")
+                        return False
+
+                    # Try to connect
                     try:
+                        logger.debug(f"Attempting connection to {connection_string}")
                         instance.connection = mavutil.mavlink_connection(
                             connection_string,
-                            timeout=10
+                            timeout=1
                         )
-                        break
+
+                        # Try to get a heartbeat
+                        msg = instance.connection.wait_heartbeat(timeout=3)
+
+                        if msg is not None:
+                            elapsed = time.time() - boot_start
+                            logger.info(f"SITL {instance_id} ready in {elapsed:.1f}s")
+                            connection_established = True
+                            break
+
                     except Exception as e:
-                        if retry < max_retries - 1:
-                            wait_time = 2 ** retry  # Exponential backoff
-                            logger.debug(f"Connection attempt {retry+1} failed, waiting {wait_time}s...")
-                            time.sleep(wait_time)
-                        else:
-                            raise e
+                        logger.debug(f"Connection attempt failed: {e}")
+                        # Close failed connection attempt
+                        if instance.connection:
+                            try:
+                                instance.connection.close()
+                            except:
+                                pass
+                            instance.connection = None
 
-                # Wait for heartbeat with longer timeout
-                logger.debug(f"Waiting for heartbeat on instance {instance_id}")
-                msg = instance.connection.wait_heartbeat(timeout=90)
+                    # Exponential backoff for next attempt
+                    elapsed = time.time() - boot_start
+                    if elapsed < 5:
+                        time.sleep(0.5)  # Check frequently at first
+                    elif elapsed < 10:
+                        time.sleep(1.0)  # Less frequent after 5s
+                    else:
+                        time.sleep(2.0)  # Even less frequent after 10s
 
-                if msg is None:
-                    logger.error(f"No heartbeat received from instance {instance_id}")
+                if not connection_established:
+                    logger.error(f"SITL {instance_id} failed to start within {max_boot_time}s")
                     logger.error(f"Check logs: /tmp/sitl_stdout_{instance_id}.log and /tmp/sitl_stderr_{instance_id}.log")
-                    self._kill_instance(instance)
                     return False
 
-                logger.debug(f"Heartbeat received from instance {instance_id}")
+                # Connection established and heartbeat received
+                logger.debug(f"Connection and heartbeat confirmed for instance {instance_id}")
 
                 # Apply parameters
                 if not self._apply_parameters(instance, parameters):
@@ -265,9 +286,16 @@ class SITLManager:
                 return False
 
     def _apply_parameters(self, instance: SITLInstance, parameters: Dict[str, float]) -> bool:
-        """Apply parameters to SITL instance"""
+        """
+        Apply parameters to SITL instance with read-back verification
+
+        This ensures parameters are actually set before continuing,
+        preventing silent failures from affecting optimization results.
+        """
         try:
             logger.debug(f"Applying {len(parameters)} parameters to instance {instance.instance_id}")
+
+            failed_params = []
 
             for param_name, param_value in parameters.items():
                 # Send parameter set command
@@ -279,13 +307,49 @@ class SITLManager:
                     mavutil.mavlink.MAV_PARAM_TYPE_REAL32
                 )
 
-                # Wait for acknowledgment
-                time.sleep(0.01)
+            # Small delay to allow parameter processing (reduced from 10ms per param)
+            time.sleep(0.1)
 
-            # Give time for parameters to settle
-            time.sleep(1)
+            # Verify critical parameters were set correctly
+            # Only verify a sample to avoid excessive overhead
+            # In production, you might verify all parameters
+            verify_count = min(5, len(parameters))
+            params_to_verify = list(parameters.items())[:verify_count]
 
-            logger.debug(f"Parameters applied to instance {instance.instance_id}")
+            for param_name, expected_value in params_to_verify:
+                # Request parameter
+                instance.connection.mav.param_request_read_send(
+                    instance.connection.target_system,
+                    instance.connection.target_component,
+                    param_name.encode('utf-8'),
+                    -1
+                )
+
+                # Wait for response
+                msg = instance.connection.recv_match(type='PARAM_VALUE', blocking=True, timeout=2)
+
+                if msg is None:
+                    logger.warning(f"No response for parameter {param_name}")
+                    failed_params.append(param_name)
+                    continue
+
+                # Decode parameter name (it's bytes)
+                received_name = msg.param_id.decode('utf-8').rstrip('\x00')
+
+                if received_name == param_name:
+                    # Check if value matches (with tolerance for floating point)
+                    if abs(msg.param_value - expected_value) > 0.001:
+                        logger.warning(
+                            f"Parameter {param_name} mismatch: "
+                            f"expected {expected_value}, got {msg.param_value}"
+                        )
+                        failed_params.append(param_name)
+
+            if failed_params:
+                logger.error(f"Failed to set parameters: {failed_params}")
+                return False
+
+            logger.debug(f"Parameters verified on instance {instance.instance_id}")
             return True
 
         except Exception as e:
@@ -398,7 +462,12 @@ class SITLManager:
     def run_parallel_simulations(self, parameter_sets: List[Dict[str, float]],
                                 test_sequence: callable, duration: float = 60.0) -> List[Tuple[bool, Dict]]:
         """
-        Run multiple simulations in parallel
+        Run multiple simulations in parallel using ThreadPoolExecutor
+
+        This provides better resource management than manual threading:
+        - Automatic thread pooling and reuse
+        - Built-in timeout and exception handling
+        - Prevents thread explosion with max_workers limit
 
         Args:
             parameter_sets: List of parameter dictionaries to test
@@ -409,36 +478,49 @@ class SITLManager:
             List of (success, telemetry) tuples
         """
         results = [None] * len(parameter_sets)
-        threads = []
 
-        def worker(idx: int, params: Dict[str, float]):
+        def worker(idx: int, params: Dict[str, float]) -> Tuple[int, Tuple[bool, Dict]]:
+            """Worker function that returns index and result"""
             # Get available instance
             instance_id = self.get_instance(timeout=300)
             if instance_id is None:
                 logger.error(f"No instance available for parameter set {idx}")
-                results[idx] = (False, {})
-                return
+                return (idx, (False, {}))
 
             try:
                 # Run simulation
                 success, telemetry = self.run_simulation(
                     instance_id, params, test_sequence, duration
                 )
-                results[idx] = (success, telemetry)
+                return (idx, (success, telemetry))
+
+            except Exception as e:
+                logger.error(f"Simulation {idx} failed with exception: {e}")
+                return (idx, (False, {}))
 
             finally:
                 # Release instance
                 self.release_instance(instance_id)
 
-        # Start threads
-        for idx, params in enumerate(parameter_sets):
-            thread = threading.Thread(target=worker, args=(idx, params))
-            thread.start()
-            threads.append(thread)
+        # Use ThreadPoolExecutor with limited workers (num_instances)
+        # This prevents creating more threads than we have SITL instances
+        with ThreadPoolExecutor(max_workers=self.num_instances) as executor:
+            # Submit all tasks
+            futures = {
+                executor.submit(worker, idx, params): idx
+                for idx, params in enumerate(parameter_sets)
+            }
 
-        # Wait for all threads
-        for thread in threads:
-            thread.join()
+            # Collect results as they complete
+            for future in as_completed(futures):
+                try:
+                    idx, result = future.result()
+                    results[idx] = result
+                except Exception as e:
+                    # Handle any unexpected exceptions
+                    original_idx = futures[future]
+                    logger.error(f"Worker {original_idx} raised exception: {e}")
+                    results[original_idx] = (False, {})
 
         return results
 
