@@ -38,7 +38,7 @@ class SITLManager:
     """Manages multiple parallel SITL instances"""
 
     def __init__(self, num_instances: int = 10, speedup: int = 1,
-                 ardupilot_path: str = None, frame_type: str = "quad-30kg"):
+                 ardupilot_path: str = None, frame_type: str = "drone-30kg"):
         """
         Initialize SITL Manager
 
@@ -46,7 +46,7 @@ class SITLManager:
             num_instances: Number of parallel SITL instances
             speedup: SITL speedup factor (1 = real-time)
             ardupilot_path: Path to ArduPilot directory
-            frame_type: Frame type to use (quad-30kg for our custom frame)
+            frame_type: Frame type to use (drone-30kg for our custom frame)
         """
         self.num_instances = num_instances
         self.speedup = speedup
@@ -171,7 +171,7 @@ class SITLManager:
                 cmd = [
                     "python3",
                     sim_vehicle_path,
-                    "-v", "ArduCopter", 
+                    "-v", "ArduCopter",
                     "-f", self.frame_type,
                     "--no-rebuild",
                     "--no-mavproxy",
