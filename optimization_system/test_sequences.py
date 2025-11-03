@@ -174,6 +174,18 @@ class TestSequence:
         """Arm and takeoff to target altitude"""
         logger.info(f"Arming and taking off to {target_altitude}m")
 
+        # Wait for EKF to initialize (critical for SITL)
+        logger.debug("Waiting for EKF initialization...")
+        start_wait = time.time()
+        while time.time() - start_wait < 30:
+            msg = self.connection.recv_match(type='EKF_STATUS_REPORT', blocking=False)
+            if msg and msg.flags & 0x01:  # EKF_CONST_POS_MODE bit
+                logger.debug(f"EKF ready after {time.time() - start_wait:.1f}s")
+                break
+            time.sleep(0.5)
+        else:
+            logger.warning("EKF initialization timeout - proceeding anyway")
+
         # Set mode to GUIDED
         mode = 'GUIDED'
         mode_id = self.connection.mode_mapping()[mode]
@@ -182,35 +194,99 @@ class TestSequence:
             mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
             mode_id)
 
+        # Wait for mode change confirmation
+        start_time = time.time()
+        mode_changed = False
+        while time.time() - start_time < 10:
+            msg = self.connection.recv_match(type='HEARTBEAT', blocking=False)
+            if msg:
+                current_mode = msg.custom_mode
+                if current_mode == mode_id:
+                    logger.debug("Mode changed to GUIDED")
+                    mode_changed = True
+                    break
+            time.sleep(0.1)
+
+        if not mode_changed:
+            logger.error("Failed to change to GUIDED mode")
+            return False
+
         time.sleep(1)
 
-        # Arm
+        # Arm the vehicle
         self.connection.mav.command_long_send(
             self.connection.target_system,
             self.connection.target_component,
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
             0, 1, 0, 0, 0, 0, 0, 0)
 
-        # Wait for arming
+        # Wait for arming confirmation
+        start_time = time.time()
+        armed = False
+        while time.time() - start_time < 10:
+            msg = self.connection.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
+            if msg:
+                armed = (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED) != 0
+                if armed:
+                    logger.info(f"Vehicle armed after {time.time() - start_time:.1f}s")
+                    break
+
+            # Check for STATUSTEXT messages (pre-arm failures)
+            status_msg = self.connection.recv_match(type='STATUSTEXT', blocking=False)
+            if status_msg:
+                text = status_msg.text
+                logger.debug(f"Status: {text}")
+                if 'PreArm' in text or 'pre-arm' in text.lower():
+                    logger.error(f"Pre-arm check failed: {text}")
+
+        if not armed:
+            logger.error("Failed to arm vehicle within timeout")
+            # Try to get pre-arm failure reason
+            for _ in range(10):
+                status_msg = self.connection.recv_match(type='STATUSTEXT', blocking=True, timeout=0.5)
+                if status_msg:
+                    logger.error(f"Status: {status_msg.text}")
+            return False
+
+        # Small delay for stabilization after arming
         time.sleep(2)
 
-        # Takeoff
+        # Takeoff command
+        logger.info(f"Sending takeoff command to {target_altitude}m")
         self.connection.mav.command_long_send(
             self.connection.target_system,
             self.connection.target_component,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
             0, 0, 0, 0, 0, 0, 0, target_altitude)
 
-        # Wait for altitude
+        # Wait for takeoff acknowledgment
+        time.sleep(1)
+
+        # Wait for altitude with improved logging
         start_time = time.time()
-        while time.time() - start_time < 30:
+        last_alt = 0
+        last_log_time = time.time()
+
+        while time.time() - start_time < 60:  # Increased timeout to 60s
             _, _, alt = self.get_position()
+
+            # Log progress every 5 seconds
+            if time.time() - last_log_time > 5:
+                if alt is not None:
+                    logger.info(f"Current altitude: {alt:.2f}m / {target_altitude}m (climbing at {(alt - last_alt)/5:.2f} m/s)")
+                    last_alt = alt
+                    last_log_time = time.time()
+                else:
+                    logger.warning("No altitude data received")
+                    last_log_time = time.time()
+
             if alt and alt >= target_altitude * 0.95:
-                logger.info(f"Reached target altitude: {alt}m")
+                logger.info(f"Reached target altitude: {alt:.2f}m in {time.time() - start_time:.1f}s")
                 return True
+
             time.sleep(0.5)
 
-        logger.error("Takeoff timeout")
+        logger.error(f"Takeoff timeout - final altitude: {alt if alt else 'unknown'}")
         return False
 
     def land_and_disarm(self) -> bool:
