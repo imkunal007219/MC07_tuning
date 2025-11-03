@@ -171,7 +171,8 @@ class SITLManager:
                 cmd = [
                     "python3",
                     sim_vehicle_path,
-                    "--model", "quad",
+                    "-v", "ArduCopter", 
+                    "-f", self.frame_type,
                     "--no-rebuild",
                     "--no-mavproxy",
                     "-w",  # Wipe eeprom
