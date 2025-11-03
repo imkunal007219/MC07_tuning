@@ -94,13 +94,28 @@ class TestSequence:
             'duration': result.duration
         }
 
-        # Add motor saturation data (placeholder)
-        if 'time' in telemetry:
-            telemetry['motor_outputs'] = np.ones((len(telemetry['time']), 4)) * 0.5  # Placeholder
+        # Add motor saturation data from actual servo outputs
+        if 'servo_outputs' in result.test_data and result.test_data['servo_outputs']:
+            servo_outputs = result.test_data['servo_outputs']
+            # Extract motor outputs (typically servos 1-4 for quadcopter)
+            # Normalize from PWM (1000-2000) to 0-1 range
+            motor_pwm = np.array([[s[1], s[2], s[3], s[4]] for s in servo_outputs])
+            telemetry['motor_outputs'] = (motor_pwm - 1000) / 1000.0  # Normalize to 0-1
+        elif 'time' in telemetry:
+            # Fallback to placeholder only if servo data unavailable
+            logger.warning("No servo output data available - using placeholder")
+            telemetry['motor_outputs'] = np.ones((len(telemetry['time']), 4)) * 0.5
 
-        # Add rates (placeholder - should be collected from actual telemetry)
-        if 'attitude' in telemetry:
-            # Approximate rates from attitude differences
+        # Add rates from actual ATTITUDE message (much more accurate than differentiation)
+        if 'rates_data' in result.test_data and result.test_data['rates_data']:
+            rates_data = result.test_data['rates_data']
+            telemetry['rates'] = np.array([[r[1], r[2], r[3]] for r in rates_data])  # rollspeed, pitchspeed, yawspeed
+            telemetry['roll_rate'] = np.array([r[1] for r in rates_data])
+            telemetry['pitch_rate'] = np.array([r[2] for r in rates_data])
+            telemetry['yaw_rate'] = np.array([r[3] for r in rates_data])
+        elif 'attitude' in telemetry:
+            # Fallback: approximate rates from attitude differences (less accurate)
+            logger.warning("No rate data available - approximating from attitude")
             if len(telemetry['attitude']) > 1:
                 dt = np.diff(telemetry['time'])
                 attitude_diff = np.diff(telemetry['attitude'], axis=0)
@@ -247,16 +262,42 @@ class HoverStabilityTest(TestSequence):
         positions = []
         attitudes = []
         velocities = []
+        servo_outputs = []
+        rates_data = []
 
         while time.time() - start_time < self.test_duration:
+            current_time = time.time() - start_time
+
+            # Get position data
             lat, lon, alt = self.get_position()
             roll, pitch, yaw = self.get_attitude()
             vx, vy, vz = self.get_velocity()
 
+            # Get servo outputs (motor PWM)
+            servo_msg = self.connection.recv_match(type='SERVO_OUTPUT_RAW', blocking=False)
+            if servo_msg:
+                servo_outputs.append((
+                    current_time,
+                    servo_msg.servo1_raw,
+                    servo_msg.servo2_raw,
+                    servo_msg.servo3_raw,
+                    servo_msg.servo4_raw
+                ))
+
+            # Get actual rates from ATTITUDE message
+            attitude_msg = self.connection.recv_match(type='ATTITUDE', blocking=False)
+            if attitude_msg:
+                rates_data.append((
+                    current_time,
+                    math.degrees(attitude_msg.rollspeed),   # Convert rad/s to deg/s
+                    math.degrees(attitude_msg.pitchspeed),
+                    math.degrees(attitude_msg.yawspeed)
+                ))
+
             if alt is not None:
-                positions.append((time.time() - start_time, lat, lon, alt))
-                attitudes.append((time.time() - start_time, roll, pitch, yaw))
-                velocities.append((time.time() - start_time, vx, vy, vz))
+                positions.append((current_time, lat, lon, alt))
+                attitudes.append((current_time, roll, pitch, yaw))
+                velocities.append((current_time, vx, vy, vz))
 
                 # Check for crash (altitude too low)
                 if alt < 1.0:
@@ -285,7 +326,9 @@ class HoverStabilityTest(TestSequence):
             'positions': positions,
             'attitudes': attitudes,
             'velocities': velocities,
-            'altitude_errors': alt_errors
+            'altitude_errors': alt_errors,
+            'servo_outputs': servo_outputs,
+            'rates_data': rates_data
         }
 
         success = max_alt_error < 1.0 and oscillations < 10
