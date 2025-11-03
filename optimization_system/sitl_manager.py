@@ -338,8 +338,11 @@ class SITLManager:
                     failed_params.append(param_name)
                     continue
 
-                # Decode parameter name (it's bytes)
-                received_name = msg.param_id.decode('utf-8').rstrip('\x00')
+                # Decode parameter name (handle both bytes and str)
+                if isinstance(msg.param_id, bytes):
+                    received_name = msg.param_id.decode('utf-8').rstrip('\x00')
+                else:
+                    received_name = msg.param_id.rstrip('\x00')
 
                 if received_name == param_name:
                     # Check if value matches (with tolerance for floating point)
