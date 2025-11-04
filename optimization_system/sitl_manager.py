@@ -190,8 +190,10 @@ class SITLManager:
 
                 # Set environment to prevent xterm and source profile
                 env = os.environ.copy()
-                env['SITL_RITW'] = '0'  # Disable "run in the window"
-                env['DISPLAY'] = ''  # Disable X11
+                # Temporarily ENABLE xterm window for debugging - comment out these lines:
+                # env['SITL_RITW'] = '0'  # Disable "run in the window"
+                # env['DISPLAY'] = ''  # Disable X11
+                # This will let you see what's happening in the SITL terminal
 
                 # Properly quote the command arguments
                 cmd_quoted = [f'"{arg}"' if ' ' in arg else arg for arg in cmd]
