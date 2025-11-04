@@ -181,6 +181,7 @@ class SITLManager:
                     "-f", self.frame_type,
                     "--no-rebuild",
                     "--no-mavproxy",
+                    "--console",  # Required when using --no-mavproxy to enable MAVLink
                     "-w",  # Wipe eeprom
                     "-I", str(instance_id),
                     "--speedup", str(self.speedup),
