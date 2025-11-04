@@ -37,6 +37,9 @@ class SITLInstance:
 class SITLManager:
     """Manages multiple parallel SITL instances"""
 
+    # Class-level shutdown flag
+    _shutdown_requested = False
+
     def __init__(self, num_instances: int = 10, speedup: int = 1,
                  ardupilot_path: str = None, frame_type: str = "drone-30kg"):
         """
@@ -139,6 +142,11 @@ class SITLManager:
         Returns:
             True if successful, False otherwise
         """
+        # Check if shutdown was requested
+        if SITLManager._shutdown_requested:
+            logger.warning(f"Shutdown requested - aborting start_instance({instance_id})")
+            return False
+
         with self.lock:
             instance = self.instances[instance_id]
 
@@ -172,58 +180,56 @@ class SITLManager:
                     "Tools/autotest/sim_vehicle.py"
                 )
 
-                # Note: The -I (instance) flag automatically handles port assignment
-                # We don't need --out because SITL uses default ports based on instance_id
-                # Removed -w flag as it causes very slow parameter loading (60+ seconds)
-                # Removed --add-param-file as drone-30kg frame already loads copter-30kg.parm by default
+                # Simple working command that matches manual SITL startup
+                # MAVProxy runs automatically and outputs to UDP port 14550 + (instance_id * 10)
+                # We connect via UDP (not TCP) to MAVProxy output port
                 cmd = [
                     "python3",
                     sim_vehicle_path,
                     "-v", "ArduCopter",
                     "-f", self.frame_type,
-                    "--no-rebuild",
-                    "--no-mavproxy",
-                    "--console",  # Required when using --no-mavproxy to enable MAVLink
-                    "-I", str(instance_id),
-                    "--speedup", str(self.speedup),
+                    "--console",  # Open MAVProxy console in separate xterm window
+                    "-I", str(instance_id),  # Instance ID for multi-instance support
+                    "--speedup", str(self.speedup),  # Speedup factor
+                    # Let MAVProxy run (don't use --no-mavproxy)
+                    # This matches the working manual command
                 ]
 
-                # Set environment to prevent xterm and source profile
+                # Set environment to show SITL terminal for debugging
                 env = os.environ.copy()
-                # Temporarily ENABLE xterm window for debugging - comment out these lines:
-                # env['SITL_RITW'] = '0'  # Disable "run in the window"
-                # env['DISPLAY'] = ''  # Disable X11
-                # This will let you see what's happening in the SITL terminal
+                # ENABLE xterm window so you can see SITL output during automation
+                # The SITL terminal will pop up showing MAVProxy console
+                # This helps debug what's happening during optimization runs
 
                 # Properly quote the command arguments
                 cmd_quoted = [f'"{arg}"' if ' ' in arg else arg for arg in cmd]
                 profile_cmd = f'. "$HOME/.profile" && {" ".join(cmd_quoted)}'
 
-                # Start SITL process with output logging
-                stdout_file = open(f"/tmp/sitl_stdout_{instance_id}.log", "w")
-                stderr_file = open(f"/tmp/sitl_stderr_{instance_id}.log", "w")
-
-                # Store file handles for cleanup to prevent file descriptor leak
-                self.log_files[instance_id] = (stdout_file, stderr_file)
-
+                # Start SITL process WITHOUT capturing output
+                # This allows MAVProxy console to be visible in terminal/xterm window
+                # Don't capture stdout/stderr so we can see MAVProxy console
                 instance.process = subprocess.Popen(
                     profile_cmd,
                     shell=True,
                     executable='/bin/bash',  # Use bash instead of sh
                     cwd=work_dir,
                     env=env,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
+                    # No stdout/stderr redirection - let output go to console
                     preexec_fn=os.setsid  # Create new process group
                 )
 
-                # Optimized boot wait: Poll for SITL readiness instead of fixed sleep
-                # This reduces average wait time from 15s to ~2-5s
+                # Wait for SITL to boot and MAVProxy to start
                 logger.debug(f"Waiting for SITL {instance_id} to boot...")
 
-                # Connect via MAVLink (SITL uses TCP on base port 5760 + instance_id*10)
-                actual_tcp_port = self.base_sitl_port + instance_id * 10
-                connection_string = f"tcp:127.0.0.1:{actual_tcp_port}"
+                # MAVProxy outputs to UDP port 14550 + (instance_id * 10)
+                # NOT TCP to SITL port 5760!
+                mavproxy_port = self.base_mavlink_port + instance_id * 10
+                connection_string = f"udp:127.0.0.1:{mavproxy_port}"
+                logger.info(f"Will connect to MAVProxy via {connection_string}")
+
+                # Give SITL time to boot before attempting connection
+                logger.info(f"Giving SITL {instance_id} 20 seconds to boot...")
+                time.sleep(20)
 
                 # Poll for SITL readiness with exponential backoff
                 # Increased timeout because EKF initialization can take 30-60 seconds
@@ -424,15 +430,7 @@ class SITLManager:
 
                 instance.process = None
 
-            # Close log file handles to prevent file descriptor leak
-            if instance.instance_id in self.log_files:
-                stdout_file, stderr_file = self.log_files[instance.instance_id]
-                try:
-                    stdout_file.close()
-                    stderr_file.close()
-                except Exception as e:
-                    logger.debug(f"Error closing log files for instance {instance.instance_id}: {e}")
-                del self.log_files[instance.instance_id]
+            # No log files to close since we're not capturing output
 
         except Exception as e:
             logger.warning(f"Error killing instance {instance.instance_id}: {e}")
@@ -510,6 +508,11 @@ class SITLManager:
         Returns:
             (success, telemetry_data)
         """
+        # Check if shutdown was requested
+        if SITLManager._shutdown_requested:
+            logger.warning(f"Shutdown requested - aborting run_simulation({instance_id})")
+            return False, {}
+
         instance = self.instances[instance_id]
 
         # Try warm-start first (much faster)
@@ -614,17 +617,23 @@ class SITLManager:
         """Cleanup all SITL instances"""
         logger.info("Cleaning up SITL instances...")
 
+        # Set shutdown flag to prevent any new SITL starts
+        SITLManager._shutdown_requested = True
+
         for instance in self.instances:
             self._kill_instance(instance)
 
-        # Ensure all log files are closed
-        for instance_id, (stdout_file, stderr_file) in list(self.log_files.items()):
-            try:
-                stdout_file.close()
-                stderr_file.close()
-            except Exception as e:
-                logger.debug(f"Error closing log files for instance {instance_id}: {e}")
+        # No log files to close since we're not capturing output
         self.log_files.clear()
+
+        # Nuclear cleanup: kill any remaining SITL/MAVProxy processes
+        logger.info("Killing any remaining SITL/MAVProxy processes...")
+        try:
+            os.system("pkill -9 arducopter 2>/dev/null")
+            os.system("pkill -9 mavproxy.py 2>/dev/null")
+            os.system("pkill -9 sim_vehicle 2>/dev/null")
+        except Exception as e:
+            logger.warning(f"Error in nuclear cleanup: {e}")
 
         # Clean up temporary directories
         for i in range(self.num_instances):

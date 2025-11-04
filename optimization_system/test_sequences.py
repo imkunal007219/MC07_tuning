@@ -204,8 +204,19 @@ class TestSequence:
             logger.error("EKF initialization timeout - cannot proceed with takeoff")
             return False
 
+        # Wait 30 seconds for all sensors to initialize and pre-arm checks to pass
+        logger.info("⏳ Waiting 30 seconds for all sensors to initialize and pre-arm checks...")
+        wait_time = 30
+        for i in range(wait_time):
+            time.sleep(1)
+            if (i + 1) % 5 == 0:  # Log every 5 seconds
+                logger.info(f"   Sensors initializing... {i + 1}/{wait_time}s")
+        logger.info("✓ Sensor initialization wait complete")
+
         # Set mode to GUIDED
-        logger.info("Setting mode to GUIDED...")
+        logger.info("=" * 60)
+        logger.info("📡 SENDING COMMAND: MODE GUIDED")
+        logger.info("=" * 60)
         mode = 'GUIDED'
         mode_id = self.connection.mode_mapping()[mode]
         self.connection.mav.set_mode_send(
@@ -229,7 +240,9 @@ class TestSequence:
             logger.warning("Could not confirm GUIDED mode, proceeding anyway...")
 
         # Arm
-        logger.info("Arming vehicle...")
+        logger.info("=" * 60)
+        logger.info("📡 SENDING COMMAND: ARM THROTTLE")
+        logger.info("=" * 60)
         self.connection.mav.command_long_send(
             self.connection.target_system,
             self.connection.target_component,
@@ -254,7 +267,9 @@ class TestSequence:
         time.sleep(1)
 
         # Takeoff
-        logger.info(f"Sending takeoff command to {target_altitude}m...")
+        logger.info("=" * 60)
+        logger.info(f"📡 SENDING COMMAND: TAKEOFF {target_altitude}m")
+        logger.info("=" * 60)
         self.connection.mav.command_long_send(
             self.connection.target_system,
             self.connection.target_component,
@@ -262,30 +277,37 @@ class TestSequence:
             0, 0, 0, 0, 0, 0, 0, target_altitude)
 
         # Wait for altitude with detailed feedback
+        logger.info(f"Monitoring altitude during takeoff (timeout: 30s)...")
         start_time = time.time()
         last_alt = 0
         no_data_count = 0
+        last_log_time = start_time
 
         while time.time() - start_time < 30:
             lat, lon, alt = self.get_position()
 
             if alt is not None:
                 no_data_count = 0
-                if abs(alt - last_alt) > 0.1:  # Only log if altitude changed significantly
-                    logger.debug(f"Altitude: {alt:.2f}m (target: {target_altitude}m)")
-                    last_alt = alt
+                last_alt = alt
+
+                # Log altitude every 2 seconds for better visibility
+                if time.time() - last_log_time >= 2:
+                    elapsed = int(time.time() - start_time)
+                    logger.info(f"   ⬆️  Altitude: {alt:.2f}m / {target_altitude}m ({elapsed}s)")
+                    last_log_time = time.time()
 
                 if alt >= target_altitude * 0.95:
-                    logger.info(f"Reached target altitude: {alt:.2f}m")
+                    logger.info(f"✓ Reached target altitude: {alt:.2f}m")
                     return True
             else:
                 no_data_count += 1
                 if no_data_count > 5:
-                    logger.warning("Lost position data during takeoff")
+                    logger.warning("⚠️  Lost position data during takeoff")
 
             time.sleep(0.5)
 
-        logger.error(f"Takeoff timeout - final altitude: {last_alt:.2f}m (target: {target_altitude}m)")
+        logger.error(f"✗ Takeoff timeout - final altitude: {last_alt:.2f}m (target: {target_altitude}m)")
+        logger.error(f"   Drone may have crashed or PIDs are not tuned correctly")
         return False
 
     def land_and_disarm(self) -> bool:
