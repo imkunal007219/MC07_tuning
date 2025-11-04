@@ -174,6 +174,8 @@ class SITLManager:
 
                 # Note: The -I (instance) flag automatically handles port assignment
                 # We don't need --out because SITL uses default ports based on instance_id
+                # Removed -w flag as it causes very slow parameter loading (60+ seconds)
+                # Removed --add-param-file as drone-30kg frame already loads copter-30kg.parm by default
                 cmd = [
                     "python3",
                     sim_vehicle_path,
@@ -182,10 +184,8 @@ class SITLManager:
                     "--no-rebuild",
                     "--no-mavproxy",
                     "--console",  # Required when using --no-mavproxy to enable MAVLink
-                    "-w",  # Wipe eeprom
                     "-I", str(instance_id),
                     "--speedup", str(self.speedup),
-                    f"--add-param-file={os.path.join(self.ardupilot_path, 'Tools/autotest/default_params/copter-30kg.parm')}"
                 ]
 
                 # Set environment to prevent xterm and source profile
@@ -224,7 +224,8 @@ class SITLManager:
                 connection_string = f"tcp:127.0.0.1:{actual_tcp_port}"
 
                 # Poll for SITL readiness with exponential backoff
-                max_boot_time = 30  # Maximum time to wait for boot
+                # Increased timeout because EKF initialization can take 30-60 seconds
+                max_boot_time = 90  # Maximum time to wait for boot
                 boot_start = time.time()
                 connection_established = False
 
