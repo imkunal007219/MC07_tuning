@@ -59,6 +59,7 @@ class SITLManager:
             project_root = os.path.dirname(script_dir)
             possible_paths = [
                 os.path.join(project_root, "ardupilot"),  # Project root
+                os.path.expanduser("~/Documents/MC07_tuning/ardupilot"),  # Standard location
                 os.path.expanduser("~/ardupilot"),         # Home directory
                 os.path.join(os.getcwd(), "ardupilot"),   # Current working directory
             ]
@@ -154,12 +155,15 @@ class SITLManager:
             temp_dir = f"/tmp/sitl_instance_{instance_id}"
             os.makedirs(temp_dir, exist_ok=True)
 
-            # Ensure free ports using OS assignment (prevents race conditions)
-            mavlink_port = self._find_free_port()
-            sitl_port = self._find_free_port()
+            # Use pre-assigned ports from _initialize_instances()
+            # ArduPilot SITL automatically assigns ports based on instance_id with -I flag:
+            # Instance 0: SITL port 5760, MAVLink 14550
+            # Instance 1: SITL port 5770, MAVLink 14560
+            # Instance N: SITL port 5760+(N*10), MAVLink 14550+(N*10)
+            sitl_port = instance.sitl_port
+            mavlink_port = instance.mavlink_port
 
-            instance.mavlink_port = mavlink_port
-            instance.sitl_port = sitl_port
+            logger.info(f"Instance {instance_id} will use SITL port {sitl_port}, MAVLink port {mavlink_port}")
 
             try:
                 # Build sim_vehicle command (matching your working command)
@@ -168,6 +172,8 @@ class SITLManager:
                     "Tools/autotest/sim_vehicle.py"
                 )
 
+                # Note: The -I (instance) flag automatically handles port assignment
+                # We don't need --out because SITL uses default ports based on instance_id
                 cmd = [
                     "python3",
                     sim_vehicle_path,
@@ -177,7 +183,6 @@ class SITLManager:
                     "--no-mavproxy",
                     "-w",  # Wipe eeprom
                     "-I", str(instance_id),
-                    "--out", f"127.0.0.1:{mavlink_port}",
                     "--speedup", str(self.speedup),
                     f"--add-param-file={os.path.join(self.ardupilot_path, 'Tools/autotest/default_params/copter-30kg.parm')}"
                 ]
