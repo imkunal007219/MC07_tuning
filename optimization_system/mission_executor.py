@@ -357,6 +357,34 @@ class MissionExecutor:
 
         logger.debug(f"RC override: Channel {channel} = {pwm}")
 
+    def _process_telemetry_metrics(self, telemetry: Dict, mission_complete: bool) -> Dict:
+        """Process raw telemetry data into numpy arrays and calculate metrics."""
+        # Convert lists to numpy arrays
+        for key in telemetry:
+            if isinstance(telemetry[key], list):
+                telemetry[key] = np.array(telemetry[key])
+
+        # Add metrics for performance evaluator
+        if len(telemetry.get('time', [])) > 0:
+            telemetry['metrics'] = {
+                'duration': telemetry['time'][-1] if len(telemetry['time']) > 0 else 0,
+                'max_altitude': np.max(telemetry['altitude']) if len(telemetry['altitude']) > 0 else 0,
+                'max_roll': np.max(np.abs(telemetry['roll'])) if len(telemetry['roll']) > 0 else 0,
+                'max_pitch': np.max(np.abs(telemetry['pitch'])) if len(telemetry['pitch']) > 0 else 0,
+                'crashed': not mission_complete,
+            }
+        else:
+            # No telemetry data collected
+            telemetry['metrics'] = {
+                'duration': 0,
+                'max_altitude': 0,
+                'max_roll': 0,
+                'max_pitch': 0,
+                'crashed': not mission_complete,
+            }
+
+        return telemetry
+
     def _monitor_mission(self, timeout: float) -> Tuple[bool, Dict]:
         """
         Monitor mission execution and collect telemetry.
@@ -436,6 +464,8 @@ class MissionExecutor:
                         mission_complete = True
                         # Give it a bit more time to collect final telemetry
                         time.sleep(1.0)
+                        # Process telemetry before returning
+                        telemetry = self._process_telemetry_metrics(telemetry, mission_complete)
                         return True, telemetry
 
             # Check for crash (very low altitude while armed)
@@ -445,19 +475,8 @@ class MissionExecutor:
 
             time.sleep(0.05)  # 20Hz telemetry collection
 
-        # Convert lists to numpy arrays
-        for key in telemetry:
-            telemetry[key] = np.array(telemetry[key])
-
-        # Add metrics for performance evaluator
-        if len(telemetry['time']) > 0:
-            telemetry['metrics'] = {
-                'duration': telemetry['time'][-1] if len(telemetry['time']) > 0 else 0,
-                'max_altitude': np.max(telemetry['altitude']) if len(telemetry['altitude']) > 0 else 0,
-                'max_roll': np.max(np.abs(telemetry['roll'])) if len(telemetry['roll']) > 0 else 0,
-                'max_pitch': np.max(np.abs(telemetry['pitch'])) if len(telemetry['pitch']) > 0 else 0,
-                'crashed': not mission_complete,
-            }
+        # Process telemetry before returning
+        telemetry = self._process_telemetry_metrics(telemetry, mission_complete)
 
         return mission_complete, telemetry
 
