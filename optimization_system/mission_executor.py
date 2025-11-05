@@ -213,9 +213,16 @@ class MissionExecutor:
         start_time = time.time()
         while time.time() - start_time < 5.0:
             msg = self.connection.recv_match(type='PARAM_VALUE', blocking=True, timeout=1)
-            if msg and msg.param_id.decode('utf-8').strip('\x00') == param_name:
-                logger.info(f"✓ {param_name} set to {msg.param_value}")
-                return True
+            if msg:
+                # Handle both string and bytes (pymavlink version differences)
+                param_id = msg.param_id
+                if isinstance(param_id, bytes):
+                    param_id = param_id.decode('utf-8')
+                param_id = param_id.strip('\x00')
+
+                if param_id == param_name:
+                    logger.info(f"✓ {param_name} set to {msg.param_value}")
+                    return True
 
         logger.warning(f"Parameter {param_name} set command sent (no confirmation)")
         return True  # Continue anyway
