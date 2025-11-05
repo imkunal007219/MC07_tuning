@@ -16,6 +16,10 @@ from optuna.samplers import TPESampler
 from datetime import datetime
 import copy
 
+from flight_logger import FlightDataLogger
+from flight_analyzer import FlightAnalyzer
+from report_generator import ReportGenerator
+
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +27,8 @@ logger = logging.getLogger(__name__)
 class BaseOptimizer(ABC):
     """Base class for optimization algorithms"""
 
-    def __init__(self, sitl_manager, evaluator, max_iterations: int = 100):
+    def __init__(self, sitl_manager, evaluator, max_iterations: int = 100,
+                 log_dir: str = "flight_logs"):
         """
         Initialize optimizer
 
@@ -31,6 +36,7 @@ class BaseOptimizer(ABC):
             sitl_manager: SITL manager instance
             evaluator: Performance evaluator instance
             max_iterations: Maximum optimization iterations
+            log_dir: Directory for flight logs and analysis
         """
         self.sitl_manager = sitl_manager
         self.evaluator = evaluator
@@ -38,6 +44,13 @@ class BaseOptimizer(ABC):
         self.best_params = None
         self.best_fitness = -np.inf
         self.convergence_history = []
+
+        # Initialize logging and analysis system
+        self.flight_logger = FlightDataLogger(log_dir=log_dir)
+        self.flight_analyzer = FlightAnalyzer(self.flight_logger)
+        self.report_generator = ReportGenerator(self.flight_logger, self.flight_analyzer)
+
+        logger.info(f"Flight logging initialized: {log_dir}")
 
     @abstractmethod
     def optimize(self, phase_name: str, parameters: List[str],
@@ -120,8 +133,8 @@ class GeneticOptimizer(BaseOptimizer):
             logger.info(f"Generation {gen + 1}/{self.max_iterations}")
             logger.info(f"{'='*60}")
 
-            # Evaluate population
-            fitnesses = self._evaluate_population(pop, parameters, bounds)
+            # Evaluate population (with logging)
+            fitnesses = self._evaluate_population(pop, parameters, bounds, generation=gen+1)
 
             # Assign fitness to individuals
             for ind, fit in zip(pop, fitnesses):
@@ -144,6 +157,23 @@ class GeneticOptimizer(BaseOptimizer):
             logger.info(f"Avg fitness: {record['avg']:.4f}")
             logger.info(f"Max fitness: {record['max']:.4f}")
             logger.info(f"Best overall: {hof[0].fitness.values[0]:.4f}")
+
+            # Log current statistics
+            stats_summary = self.flight_logger.get_statistics()
+            logger.info(f"Total flights logged: {stats_summary['total_flights']} "
+                       f"(Success rate: {stats_summary['success_rate']:.1%})")
+
+            # Generate analysis report every 5 generations
+            if (gen + 1) % 5 == 0:
+                logger.info("Generating interim analysis report...")
+                report_file = f"reports/optimization_gen{gen+1}.html"
+                try:
+                    import os
+                    os.makedirs("reports", exist_ok=True)
+                    self.report_generator.generate_html_report(report_file)
+                    logger.info(f"✓ Report generated: {report_file}")
+                except Exception as e:
+                    logger.warning(f"Could not generate report: {e}")
 
             # Check convergence
             if self._check_convergence():
@@ -208,6 +238,38 @@ class GeneticOptimizer(BaseOptimizer):
         logger.info(f"Best fitness: {best_fitness:.4f}")
         logger.info(f"Best parameters: {best_params}")
 
+        # Generate final comprehensive report
+        logger.info("\nGenerating final analysis report...")
+        try:
+            import os
+            os.makedirs("reports", exist_ok=True)
+
+            # HTML report with visualizations
+            final_report = "reports/final_optimization_report.html"
+            self.report_generator.generate_html_report(final_report)
+            logger.info(f"✓ Final HTML report: {final_report}")
+
+            # JSON analysis export
+            json_report = "reports/analysis.json"
+            self.flight_analyzer.export_analysis_json(json_report)
+            logger.info(f"✓ Analysis data exported: {json_report}")
+
+            # CSV data export for external analysis
+            csv_export = "reports/all_flights.csv"
+            self.flight_logger.export_csv(csv_export)
+            logger.info(f"✓ Flight data CSV: {csv_export}")
+
+            # Print key recommendations
+            summary = self.flight_analyzer.generate_summary_report()
+            logger.info("\n" + "="*60)
+            logger.info("KEY RECOMMENDATIONS:")
+            logger.info("="*60)
+            for rec in summary.get('recommendations', []):
+                logger.info(rec)
+
+        except Exception as e:
+            logger.warning(f"Could not generate final report: {e}")
+
         return best_params, best_fitness, self.convergence_history
 
     def _setup_deap(self, parameters: List[str], bounds: Dict[str, Tuple[float, float]]):
@@ -235,7 +297,8 @@ class GeneticOptimizer(BaseOptimizer):
         self.toolbox.register("select", tools.selTournament, tournsize=3)
 
     def _evaluate_population(self, population: List, parameters: List[str],
-                            bounds: Dict[str, Tuple[float, float]]) -> List[float]:
+                            bounds: Dict[str, Tuple[float, float]],
+                            generation: int = None) -> List[float]:
         """Evaluate fitness of entire population in parallel"""
 
         logger.info(f"Evaluating population of {len(population)} individuals...")
@@ -253,17 +316,31 @@ class GeneticOptimizer(BaseOptimizer):
             duration=30.0  # 30 second test
         )
 
-        # Calculate fitness for each result
+        # Calculate fitness for each result AND log each flight
         fitnesses = []
-        for success, telemetry in results:
+        for idx, (success, telemetry) in enumerate(results):
             if success and telemetry:
                 metrics = self.evaluator.evaluate_telemetry(telemetry)
-                fitnesses.append(metrics.fitness)
+                fitness = metrics.fitness
+                fitnesses.append(fitness)
             else:
                 # Failed simulation - very poor fitness
-                fitnesses.append(-1000.0)
+                fitness = -1000.0
+                fitnesses.append(fitness)
 
-        logger.info(f"Evaluated {len(fitnesses)} individuals")
+            # Log flight with parameters and telemetry for automated analysis
+            flight_id = self.flight_logger.log_flight(
+                parameters=param_sets[idx],
+                telemetry=telemetry if telemetry else {},
+                success=success,
+                generation=generation,
+                individual_id=idx
+            )
+
+            if flight_id:
+                logger.debug(f"Flight {flight_id} logged (fitness: {fitness:.4f})")
+
+        logger.info(f"Evaluated and logged {len(fitnesses)} individuals")
         return fitnesses
 
     def _individual_to_params(self, individual: List[float], parameters: List[str],
