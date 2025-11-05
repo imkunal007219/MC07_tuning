@@ -7,6 +7,7 @@ The latest code includes:
 2. **✅ EKF Initialization** - Proper 30s wait for all sensors
 3. **✅ Port Fix** - Correct UDP connection to MAVProxy
 4. **✅ Command Visibility** - Logs show all commands being sent
+5. **✅ Automated Logging & Analysis** - Proves which parameters work with statistical analysis
 
 ## 🚀 Run Your First Test
 
@@ -120,16 +121,74 @@ connection_string = f"udp:127.0.0.1:{mavproxy_port}"  # Port 14550
 # connection_string = f"tcp:127.0.0.1:{sitl_port}"    # Port 5760
 ```
 
+## 📊 Automated Logging & Analysis System
+
+**NEW!** The system now automatically tracks and analyzes all flights to prove which parameters work.
+
+### What Gets Logged
+Every flight is automatically logged with:
+- ✅ Exact parameters used
+- ✅ Complete telemetry data
+- ✅ Success/failure outcome
+- ✅ Performance metrics
+- ✅ Generation and individual ID
+
+### Automatic Analysis
+The system automatically calculates:
+- 📊 **Parameter correlations** - Which parameters affect success (with p-values)
+- 🎯 **Optimal ranges** - Recommended parameter values with confidence levels
+- ⚖️ **Stability metrics** - Oscillations, overshoot, settling time, altitude accuracy
+- 📈 **Success rate evolution** - How optimization improves over time
+
+### Reports Generated
+During optimization, the system generates:
+- **Interim reports** every 5 generations: `reports/optimization_gen5.html`
+- **Final report** after optimization: `reports/final_optimization_report.html`
+- **Data exports**: JSON and CSV for further analysis
+
+**Example output:**
+```
+Generation 5/20
+Total flights logged: 250 (Success rate: 68.4%)
+✓ Report generated: reports/optimization_gen5.html
+
+Final Report:
+✓ Final HTML report: reports/final_optimization_report.html
+✓ Analysis data exported: reports/analysis.json
+✓ Flight data CSV: reports/all_flights.csv
+
+KEY RECOMMENDATIONS:
+📊 ATC_RAT_RLL_P: Higher values show strong correlation with success (r=0.82)
+🎯 ATC_RAT_RLL_P: Recommended range [0.145, 0.175] (confidence: High)
+```
+
+### View Reports
+```bash
+# Open HTML report in browser
+firefox reports/final_optimization_report.html
+```
+
+### Test the Logging System
+```bash
+# Run logging system test
+python3 test_logging_system.py
+
+# View test report
+firefox test_reports/test_report.html
+```
+
+**Full documentation:** See `LOGGING_SYSTEM.md` for complete details.
+
 ## 🎯 Next Steps
 
-### 1. Test with Mission File (Coming Soon)
+### 1. Test with Mission File ✅ IMPLEMENTED
 
-Instead of programmatic commands, load a mission file:
+Mission-based testing is now available:
 ```python
-# Future feature
-mission_file = "missions/standard_test.waypoints"
-upload_mission(connection, mission_file)
-set_mode(connection, "AUTO")
+# Load and run a mission
+from mission_executor import run_mission_test
+mission_file = "missions/simple_hover.waypoints"
+success, telemetry = run_mission_test(connection, mission_file, timeout=60)
 ```
 
 ### 2. Add Web Dashboard (Planned)
