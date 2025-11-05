@@ -37,8 +37,12 @@ class SITLInstance:
 class SITLManager:
     """Manages multiple parallel SITL instances"""
 
+    # Class-level shutdown flag
+    _shutdown_requested = False
+
     def __init__(self, num_instances: int = 10, speedup: int = 1,
-                 ardupilot_path: str = None, frame_type: str = "drone-30kg"):
+                 ardupilot_path: str = None, frame_type: str = "drone-30kg",
+                 pre_start: bool = True):
         """
         Initialize SITL Manager
 
@@ -47,6 +51,7 @@ class SITLManager:
             speedup: SITL speedup factor (1 = real-time)
             ardupilot_path: Path to ArduPilot directory
             frame_type: Frame type to use (drone-30kg for our custom frame)
+            pre_start: If True, start all SITL instances immediately in parallel
         """
         self.num_instances = num_instances
         self.speedup = speedup
@@ -59,6 +64,7 @@ class SITLManager:
             project_root = os.path.dirname(script_dir)
             possible_paths = [
                 os.path.join(project_root, "ardupilot"),  # Project root
+                os.path.expanduser("~/Documents/MC07_tuning/ardupilot"),  # Standard location
                 os.path.expanduser("~/ardupilot"),         # Home directory
                 os.path.join(os.getcwd(), "ardupilot"),   # Current working directory
             ]
@@ -95,6 +101,10 @@ class SITLManager:
         # Initialize instances
         self._initialize_instances()
 
+        # Pre-start instances if requested
+        if pre_start:
+            self._pre_start_all_instances()
+
     def _initialize_instances(self):
         """Initialize all SITL instances"""
         logger.info(f"Initializing {self.num_instances} SITL instances...")
@@ -113,6 +123,52 @@ class SITLManager:
             self.instance_queue.put(i)
 
         logger.info(f"Initialized {len(self.instances)} instances")
+
+    def _pre_start_all_instances(self):
+        """Start all SITL instances in parallel for faster initialization"""
+        logger.info(f"Pre-starting all {self.num_instances} SITL instances in parallel...")
+        logger.info("This will take ~40-60 seconds. Please wait...")
+
+        def start_worker(instance_id: int) -> Tuple[int, bool]:
+            """Worker to start a single instance"""
+            try:
+                # Use default parameters for initial start
+                success = self.start_instance(instance_id, {})
+                if success:
+                    logger.info(f"✓ Instance {instance_id} started successfully")
+                    self.warm_instances_ready.add(instance_id)
+                else:
+                    logger.error(f"✗ Instance {instance_id} failed to start")
+                return (instance_id, success)
+            except Exception as e:
+                logger.error(f"✗ Instance {instance_id} failed with exception: {e}")
+                return (instance_id, False)
+
+        # Start all instances in parallel
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        start_time = time.time()
+        successful = 0
+        failed = 0
+
+        with ThreadPoolExecutor(max_workers=self.num_instances) as executor:
+            futures = {
+                executor.submit(start_worker, i): i
+                for i in range(self.num_instances)
+            }
+
+            for future in as_completed(futures):
+                instance_id, success = future.result()
+                if success:
+                    successful += 1
+                else:
+                    failed += 1
+
+        elapsed = time.time() - start_time
+        logger.info(f"Pre-start complete in {elapsed:.1f}s: {successful} successful, {failed} failed")
+
+        if failed > 0:
+            logger.warning(f"⚠ {failed} instances failed to start - optimization will use {successful} instances")
 
     def _find_free_port(self) -> int:
         """
@@ -138,6 +194,11 @@ class SITLManager:
         Returns:
             True if successful, False otherwise
         """
+        # Check if shutdown was requested
+        if SITLManager._shutdown_requested:
+            logger.warning(f"Shutdown requested - aborting start_instance({instance_id})")
+            return False
+
         with self.lock:
             instance = self.instances[instance_id]
 
@@ -154,12 +215,15 @@ class SITLManager:
             temp_dir = f"/tmp/sitl_instance_{instance_id}"
             os.makedirs(temp_dir, exist_ok=True)
 
-            # Ensure free ports using OS assignment (prevents race conditions)
-            mavlink_port = self._find_free_port()
-            sitl_port = self._find_free_port()
+            # Use pre-assigned ports from _initialize_instances()
+            # ArduPilot SITL automatically assigns ports based on instance_id with -I flag:
+            # Instance 0: SITL port 5760, MAVLink 14550
+            # Instance 1: SITL port 5770, MAVLink 14560
+            # Instance N: SITL port 5760+(N*10), MAVLink 14550+(N*10)
+            sitl_port = instance.sitl_port
+            mavlink_port = instance.mavlink_port
 
-            instance.mavlink_port = mavlink_port
-            instance.sitl_port = sitl_port
+            logger.info(f"Instance {instance_id} will use SITL port {sitl_port}, MAVLink port {mavlink_port}")
 
             try:
                 # Build sim_vehicle command (matching your working command)
@@ -168,57 +232,60 @@ class SITLManager:
                     "Tools/autotest/sim_vehicle.py"
                 )
 
+                # Simple working command that matches manual SITL startup
+                # MAVProxy runs automatically and outputs to UDP port 14550 + (instance_id * 10)
+                # We connect via UDP (not TCP) to MAVProxy output port
                 cmd = [
                     "python3",
                     sim_vehicle_path,
                     "-v", "ArduCopter",
                     "-f", self.frame_type,
-                    "--no-rebuild",
-                    "--no-mavproxy",
-                    "-w",  # Wipe eeprom
-                    "-I", str(instance_id),
-                    "--out", f"127.0.0.1:{mavlink_port}",
-                    "--speedup", str(self.speedup),
-                    f"--add-param-file={os.path.join(self.ardupilot_path, 'Tools/autotest/default_params/copter-30kg.parm')}"
+                    "--console",  # Open MAVProxy console in separate xterm window
+                    "-I", str(instance_id),  # Instance ID for multi-instance support
+                    "--speedup", str(self.speedup),  # Speedup factor
+                    # Let MAVProxy run (don't use --no-mavproxy)
+                    # This matches the working manual command
                 ]
 
-                # Set environment to prevent xterm and source profile
+                # Set environment to show SITL terminal for debugging
                 env = os.environ.copy()
-                env['SITL_RITW'] = '0'  # Disable "run in the window"
-                env['DISPLAY'] = ''  # Disable X11
+                # ENABLE xterm window so you can see SITL output during automation
+                # The SITL terminal will pop up showing MAVProxy console
+                # This helps debug what's happening during optimization runs
 
                 # Properly quote the command arguments
                 cmd_quoted = [f'"{arg}"' if ' ' in arg else arg for arg in cmd]
                 profile_cmd = f'. "$HOME/.profile" && {" ".join(cmd_quoted)}'
 
-                # Start SITL process with output logging
-                stdout_file = open(f"/tmp/sitl_stdout_{instance_id}.log", "w")
-                stderr_file = open(f"/tmp/sitl_stderr_{instance_id}.log", "w")
-
-                # Store file handles for cleanup to prevent file descriptor leak
-                self.log_files[instance_id] = (stdout_file, stderr_file)
-
+                # Start SITL process WITHOUT capturing output
+                # This allows MAVProxy console to be visible in terminal/xterm window
+                # Don't capture stdout/stderr so we can see MAVProxy console
                 instance.process = subprocess.Popen(
                     profile_cmd,
                     shell=True,
                     executable='/bin/bash',  # Use bash instead of sh
                     cwd=work_dir,
                     env=env,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
+                    # No stdout/stderr redirection - let output go to console
                     preexec_fn=os.setsid  # Create new process group
                 )
 
-                # Optimized boot wait: Poll for SITL readiness instead of fixed sleep
-                # This reduces average wait time from 15s to ~2-5s
+                # Wait for SITL to boot and MAVProxy to start
                 logger.debug(f"Waiting for SITL {instance_id} to boot...")
 
-                # Connect via MAVLink (SITL uses TCP on base port 5760 + instance_id*10)
-                actual_tcp_port = self.base_sitl_port + instance_id * 10
-                connection_string = f"tcp:127.0.0.1:{actual_tcp_port}"
+                # MAVProxy outputs to UDP port 14550 + (instance_id * 10)
+                # NOT TCP to SITL port 5760!
+                mavproxy_port = self.base_mavlink_port + instance_id * 10
+                connection_string = f"udp:127.0.0.1:{mavproxy_port}"
+                logger.info(f"Will connect to MAVProxy via {connection_string}")
+
+                # Give SITL time to boot before attempting connection
+                logger.info(f"Giving SITL {instance_id} 20 seconds to boot...")
+                time.sleep(20)
 
                 # Poll for SITL readiness with exponential backoff
-                max_boot_time = 30  # Maximum time to wait for boot
+                # Increased timeout because EKF initialization can take 30-60 seconds
+                max_boot_time = 90  # Maximum time to wait for boot
                 boot_start = time.time()
                 connection_established = False
 
@@ -390,40 +457,36 @@ class SITLManager:
     def _kill_instance(self, instance: SITLInstance):
         """Kill a SITL instance process"""
         try:
-            if instance.connection:
-                instance.connection.close()
-                instance.connection = None
+            # Don't bother with graceful connection close - just kill processes
+            # Graceful close can hang if MAVProxy is stuck reconnecting
+            instance.connection = None
 
             if instance.process and instance.process.pid:
-                # Kill entire process group with proper error handling
+                # Kill entire process group immediately with SIGKILL
                 try:
-                    os.killpg(os.getpgid(instance.process.pid), signal.SIGTERM)
+                    logger.debug(f"Force killing process group for instance {instance.instance_id} (PID: {instance.process.pid})")
 
-                    # Wait for process to terminate
+                    # Use SIGKILL immediately - no graceful shutdown
+                    os.killpg(os.getpgid(instance.process.pid), signal.SIGKILL)
+
+                    # Very short wait - process should die immediately with SIGKILL
                     try:
-                        instance.process.wait(timeout=5)
+                        instance.process.wait(timeout=0.5)
                     except subprocess.TimeoutExpired:
-                        # Force kill if still running
-                        try:
-                            os.killpg(os.getpgid(instance.process.pid), signal.SIGKILL)
-                            instance.process.wait()
-                        except (ProcessLookupError, OSError):
-                            pass  # Process already terminated
-                except (ProcessLookupError, OSError):
+                        # Should not happen with SIGKILL, but just move on
+                        pass
+                    except (ProcessLookupError, OSError):
+                        pass  # Process already terminated
+
+                except (ProcessLookupError, OSError) as e:
                     # Process already terminated
-                    pass
+                    logger.debug(f"Process {instance.instance_id} already terminated: {e}")
+                except Exception as e:
+                    logger.warning(f"Unexpected error killing instance {instance.instance_id}: {e}")
 
                 instance.process = None
 
-            # Close log file handles to prevent file descriptor leak
-            if instance.instance_id in self.log_files:
-                stdout_file, stderr_file = self.log_files[instance.instance_id]
-                try:
-                    stdout_file.close()
-                    stderr_file.close()
-                except Exception as e:
-                    logger.debug(f"Error closing log files for instance {instance.instance_id}: {e}")
-                del self.log_files[instance.instance_id]
+            # No log files to close since we're not capturing output
 
         except Exception as e:
             logger.warning(f"Error killing instance {instance.instance_id}: {e}")
@@ -499,9 +562,17 @@ class SITLManager:
             duration: Maximum simulation duration
 
         Returns:
-            (success, telemetry_data)
+            (success, telemetry_data) - telemetry includes verified parameters from .bin log
         """
+        # Check if shutdown was requested
+        if SITLManager._shutdown_requested:
+            logger.warning(f"Shutdown requested - aborting run_simulation({instance_id})")
+            return False, {}
+
         instance = self.instances[instance_id]
+
+        # Store temp directory for .bin file extraction
+        temp_dir = f"/tmp/sitl_instance_{instance_id}"
 
         # Try warm-start first (much faster)
         if self.warm_start and instance_id in self.warm_instances_ready:
@@ -509,6 +580,10 @@ class SITLManager:
                 # Warm update successful, run test directly
                 try:
                     success, telemetry = test_sequence(instance.connection, duration)
+
+                    # Extract parameters from .bin log for verification
+                    self._add_bin_log_verification(telemetry, temp_dir, parameters, instance_id)
+
                     return success, telemetry
                 except Exception as e:
                     logger.error(f"Warm simulation failed on instance {instance_id}: {e}")
@@ -526,6 +601,9 @@ class SITLManager:
             # Run test sequence and collect telemetry
             success, telemetry = test_sequence(instance.connection, duration)
 
+            # Extract parameters from .bin log for verification
+            self._add_bin_log_verification(telemetry, temp_dir, parameters, instance_id)
+
             return success, telemetry
 
         except Exception as e:
@@ -535,6 +613,83 @@ class SITLManager:
         finally:
             # Stop instance (respects warm-start mode)
             self.stop_instance(instance_id)
+
+    def _add_bin_log_verification(self, telemetry: Dict, temp_dir: str,
+                                   intended_params: Dict[str, float],
+                                   instance_id: int) -> None:
+        """
+        Extract parameters from .bin log file and add verification to telemetry.
+
+        This provides proof that parameters were actually applied during flight.
+
+        Args:
+            telemetry: Telemetry dictionary to add verification data to
+            temp_dir: Temporary directory where .bin logs are stored
+            intended_params: Parameters we intended to set
+            instance_id: Instance ID for logging
+        """
+        try:
+            from bin_log_analyzer import BinLogAnalyzer
+
+            # Find latest .bin log in ArduPilot logs directory
+            bin_file = BinLogAnalyzer.find_latest_bin_log(self.ardupilot_path, instance_id)
+
+            if not bin_file:
+                logger.warning(f"No .bin log found for instance {instance_id}")
+                telemetry['bin_log_params'] = {}
+                telemetry['param_verification'] = {
+                    'all_match': False,
+                    'error': 'No .bin log found'
+                }
+                return
+
+            # Extract parameters from .bin log using CSV method (preferred)
+            actual_params = BinLogAnalyzer.extract_parameters_csv(bin_file)
+
+            if not actual_params:
+                logger.warning(f"Could not extract parameters from {bin_file}")
+                telemetry['bin_log_params'] = {}
+                telemetry['param_verification'] = {
+                    'all_match': False,
+                    'error': 'Failed to extract parameters'
+                }
+                return
+
+            # Store actual parameters from log
+            telemetry['bin_log_params'] = actual_params
+            telemetry['bin_log_file'] = bin_file
+
+            # Verify intended vs actual
+            if intended_params:
+                verification = BinLogAnalyzer.verify_parameters_match(
+                    intended_params,
+                    actual_params
+                )
+                telemetry['param_verification'] = verification
+
+                if verification['all_match']:
+                    logger.info(f"✓ All {verification['match_count']} parameters verified from .bin log")
+                else:
+                    logger.warning(
+                        f"⚠ Parameter verification: {verification['match_count']}/{verification['total_count']} match "
+                        f"({verification['verification_rate']:.1%})"
+                    )
+            else:
+                # No intended parameters to verify (e.g., default run)
+                telemetry['param_verification'] = {
+                    'all_match': True,
+                    'match_count': 0,
+                    'total_count': 0,
+                    'note': 'No intended parameters to verify'
+                }
+
+        except Exception as e:
+            logger.error(f"Failed to add .bin log verification: {e}")
+            telemetry['bin_log_params'] = {}
+            telemetry['param_verification'] = {
+                'all_match': False,
+                'error': str(e)
+            }
 
     def run_parallel_simulations(self, parameter_sets: List[Dict[str, float]],
                                 test_sequence: callable, duration: float = 60.0) -> List[Tuple[bool, Dict]]:
@@ -603,29 +758,51 @@ class SITLManager:
 
     def cleanup(self):
         """Cleanup all SITL instances"""
+        # Check if instances exist (in case cleanup called after failed __init__)
+        if not hasattr(self, 'instances'):
+            return
+
         logger.info("Cleaning up SITL instances...")
 
-        for instance in self.instances:
-            self._kill_instance(instance)
+        # Set shutdown flag to prevent any new SITL starts
+        SITLManager._shutdown_requested = True
 
-        # Ensure all log files are closed
-        for instance_id, (stdout_file, stderr_file) in list(self.log_files.items()):
+        # Kill all instances with short timeout per instance
+        for instance in self.instances:
             try:
-                stdout_file.close()
-                stderr_file.close()
+                self._kill_instance(instance)
             except Exception as e:
-                logger.debug(f"Error closing log files for instance {instance_id}: {e}")
-        self.log_files.clear()
+                logger.warning(f"Error killing instance {instance.instance_id}: {e}")
+                # Continue to next instance
+
+        # No log files to close since we're not capturing output
+        if hasattr(self, 'log_files'):
+            self.log_files.clear()
+
+        # Nuclear cleanup: kill ANY remaining SITL/MAVProxy processes
+        # This is important - sometimes processes escape the process group kill
+        logger.info("Killing any remaining SITL/MAVProxy processes...")
+        try:
+            # Use pkill -9 (SIGKILL) for immediate termination
+            os.system("pkill -9 arducopter 2>/dev/null")
+            os.system("pkill -9 'mavproxy.py' 2>/dev/null")
+            os.system("pkill -9 python 2>/dev/null | grep -q mavproxy")  # Kill mavproxy python processes
+            os.system("pkill -9 sim_vehicle 2>/dev/null")
+            # Also kill any xterm windows that might be hanging
+            os.system("pkill -9 xterm 2>/dev/null")
+        except Exception as e:
+            logger.warning(f"Error in nuclear cleanup: {e}")
 
         # Clean up temporary directories
-        for i in range(self.num_instances):
+        num_instances = getattr(self, 'num_instances', 0)
+        for i in range(num_instances):
             work_dir = f"/tmp/sitl_instance_{i}"
             if os.path.exists(work_dir):
                 try:
                     import shutil
-                    shutil.rmtree(work_dir)
+                    shutil.rmtree(work_dir, ignore_errors=True)  # Don't fail on errors
                 except Exception as e:
-                    logger.warning(f"Failed to remove {work_dir}: {e}")
+                    logger.debug(f"Failed to remove {work_dir}: {e}")
 
         logger.info("Cleanup complete")
 

@@ -301,10 +301,19 @@ TODO list
      ☐ Generate final parameter file and performance reports
 
 
-**notes 
-1.if you want to run any ardupilot command or simulation , use this ". ~/.profile" command first 
+**notes
+1. if you want to run any ardupilot command or simulation, use this ". ~/.profile" command first
 
-2. do not create any summary after task completion unless asked to as we have to save token and work efficiently 
+2. do not create any summary after task completion unless asked to as we have to save token and work efficiently
 
-3. if you want to run arducopter sitl you go to this folder /Documents/WORK/mc07 sitl/ardupilot/ArduCopter and run this command "../Tools/autotest/sim_vehicle.py --map --console" , this is a standard command you can modify yourself according to our needs as we have made a custom drone model with custom parameters 
+3. **ArduPilot path:** ~/Documents/MC07_tuning/ardupilot
+   - If you want to run arducopter sitl manually, go to ~/Documents/MC07_tuning/ardupilot/ArduCopter
+   - Run command: "../Tools/autotest/sim_vehicle.py --map --console"
+   - For custom drone: "../Tools/autotest/sim_vehicle.py -f drone-30kg --map --console"
+
+4. **Multi-instance SITL:** ArduPilot automatically assigns ports based on instance ID:
+   - Instance 0: SITL port 5760, MAVLink port 14550
+   - Instance 1: SITL port 5770, MAVLink port 14560
+   - Instance N: SITL port 5760+(N*10), MAVLink port 14550+(N*10)
+   - Use -I flag to specify instance: "sim_vehicle.py -I 0", "sim_vehicle.py -I 1", etc. 
 
