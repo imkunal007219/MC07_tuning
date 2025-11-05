@@ -347,57 +347,61 @@ class MissionExecutor:
 
         mission_complete = False
         last_waypoint = 0
+        is_armed = True  # Track arming state
+        last_heartbeat_check = time.time()
 
         while time.time() - start_time < timeout:
             current_time = time.time() - start_time
 
-            # Get position
-            pos_msg = self.connection.recv_match(type='GLOBAL_POSITION_INT', blocking=False)
-            if pos_msg:
-                telemetry['time'].append(current_time)
-                telemetry['latitude'].append(pos_msg.lat / 1e7)
-                telemetry['longitude'].append(pos_msg.lon / 1e7)
-                telemetry['altitude'].append(pos_msg.relative_alt / 1000.0)
-                telemetry['vx'].append(pos_msg.vx / 100.0)
-                telemetry['vy'].append(pos_msg.vy / 100.0)
-                telemetry['vz'].append(pos_msg.vz / 100.0)
-
-            # Get attitude
-            att_msg = self.connection.recv_match(type='ATTITUDE', blocking=False)
-            if att_msg:
-                telemetry['roll'].append(np.degrees(att_msg.roll))
-                telemetry['pitch'].append(np.degrees(att_msg.pitch))
-                telemetry['yaw'].append(np.degrees(att_msg.yaw))
-                telemetry['roll_rate'].append(np.degrees(att_msg.rollspeed))
-                telemetry['pitch_rate'].append(np.degrees(att_msg.pitchspeed))
-                telemetry['yaw_rate'].append(np.degrees(att_msg.yawspeed))
-
-            # Check mission progress
-            mission_msg = self.connection.recv_match(type='MISSION_CURRENT', blocking=False)
-            if mission_msg:
-                if mission_msg.seq > last_waypoint:
-                    logger.info(f"Reached waypoint {mission_msg.seq}")
-                    last_waypoint = mission_msg.seq
-
-            # Check if mission completed
-            mission_item_reached = self.connection.recv_match(
-                type='MISSION_ITEM_REACHED',
-                blocking=False
-            )
-            if mission_item_reached:
-                logger.debug(f"Waypoint {mission_item_reached.seq} reached")
-
-            # Check if landed
-            heartbeat = self.connection.recv_match(type='HEARTBEAT', blocking=False)
-            if heartbeat:
-                # Check if disarmed (mission complete and landed)
-                if not (heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
-                    logger.info("Vehicle disarmed - mission complete")
-                    mission_complete = True
+            # Get all available messages in queue
+            while True:
+                msg = self.connection.recv_match(blocking=False)
+                if msg is None:
                     break
 
+                msg_type = msg.get_type()
+
+                # Process different message types
+                if msg_type == 'GLOBAL_POSITION_INT':
+                    telemetry['time'].append(current_time)
+                    telemetry['latitude'].append(msg.lat / 1e7)
+                    telemetry['longitude'].append(msg.lon / 1e7)
+                    telemetry['altitude'].append(msg.relative_alt / 1000.0)
+                    telemetry['vx'].append(msg.vx / 100.0)
+                    telemetry['vy'].append(msg.vy / 100.0)
+                    telemetry['vz'].append(msg.vz / 100.0)
+
+                elif msg_type == 'ATTITUDE':
+                    telemetry['roll'].append(np.degrees(msg.roll))
+                    telemetry['pitch'].append(np.degrees(msg.pitch))
+                    telemetry['yaw'].append(np.degrees(msg.yaw))
+                    telemetry['roll_rate'].append(np.degrees(msg.rollspeed))
+                    telemetry['pitch_rate'].append(np.degrees(msg.pitchspeed))
+                    telemetry['yaw_rate'].append(np.degrees(msg.yawspeed))
+
+                elif msg_type == 'MISSION_CURRENT':
+                    if msg.seq > last_waypoint:
+                        logger.info(f"Reached waypoint {msg.seq}")
+                        last_waypoint = msg.seq
+
+                elif msg_type == 'MISSION_ITEM_REACHED':
+                    logger.debug(f"Waypoint {msg.seq} reached")
+
+                elif msg_type == 'HEARTBEAT':
+                    # Check arming status
+                    was_armed = is_armed
+                    is_armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+
+                    # Detect disarm event
+                    if was_armed and not is_armed:
+                        logger.info("Vehicle disarmed - mission complete")
+                        mission_complete = True
+                        # Give it a bit more time to collect final telemetry
+                        time.sleep(1.0)
+                        return True, telemetry
+
             # Check for crash (very low altitude while armed)
-            if telemetry['altitude'] and telemetry['altitude'][-1] < -0.5:
+            if is_armed and telemetry['altitude'] and telemetry['altitude'][-1] < -0.5:
                 logger.error("Crash detected (negative altitude)")
                 break
 
