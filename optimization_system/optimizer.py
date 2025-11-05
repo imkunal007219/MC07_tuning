@@ -20,6 +20,7 @@ from flight_logger import FlightDataLogger
 from flight_analyzer import FlightAnalyzer
 from report_generator import ReportGenerator
 from physics_based_seeding import PhysicsBasedSeeder
+from hierarchical_constraints import HierarchicalConstraintValidator
 
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,8 @@ class GeneticOptimizer(BaseOptimizer):
     def __init__(self, sitl_manager, evaluator, max_generations: int = 100,
                  population_size: int = 50, mutation_rate: float = 0.2,
                  crossover_rate: float = 0.7, drone_params: Dict = None,
-                 use_physics_seeding: bool = True):
+                 use_physics_seeding: bool = True,
+                 enforce_hierarchical_constraints: bool = True):
         """
         Initialize Genetic Algorithm optimizer
 
@@ -91,6 +93,7 @@ class GeneticOptimizer(BaseOptimizer):
             crossover_rate: Crossover probability
             drone_params: Dictionary of drone physical parameters
             use_physics_seeding: Whether to use physics-based population seeding
+            enforce_hierarchical_constraints: Whether to enforce bandwidth separation constraints
         """
         super().__init__(sitl_manager, evaluator, max_generations)
         self.population_size = population_size
@@ -107,6 +110,18 @@ class GeneticOptimizer(BaseOptimizer):
             logger.info("Physics-based population seeding enabled")
         else:
             logger.info("Using random population initialization")
+
+        # Initialize hierarchical constraint validator
+        self.hierarchical_validator = None
+        if enforce_hierarchical_constraints and drone_params:
+            self.hierarchical_validator = HierarchicalConstraintValidator(
+                drone_params=drone_params,
+                enforce_constraints=True,
+                penalty_multiplier=1000.0
+            )
+            logger.info("Hierarchical bandwidth constraints enabled")
+        else:
+            logger.info("Hierarchical constraints disabled")
 
     def optimize(self, phase_name: str, parameters: List[str],
                 bounds: Dict[str, Tuple[float, float]],
@@ -166,8 +181,9 @@ class GeneticOptimizer(BaseOptimizer):
             logger.info(f"Generation {gen + 1}/{self.max_iterations}")
             logger.info(f"{'='*60}")
 
-            # Evaluate population (with logging)
-            fitnesses = self._evaluate_population(pop, parameters, bounds, generation=gen+1)
+            # Evaluate population (with logging and hierarchical constraints)
+            fitnesses = self._evaluate_population(pop, parameters, bounds,
+                                                 generation=gen+1, phase_name=phase_name)
 
             # Assign fitness to individuals
             for ind, fit in zip(pop, fitnesses):
@@ -271,6 +287,11 @@ class GeneticOptimizer(BaseOptimizer):
         logger.info(f"Best fitness: {best_fitness:.4f}")
         logger.info(f"Best parameters: {best_params}")
 
+        # Store optimized parameters for hierarchical constraint validation
+        if self.hierarchical_validator:
+            self.hierarchical_validator.set_optimized_phase(phase_name, best_params)
+            logger.info(f"✓ Stored optimized parameters for {phase_name}")
+
         # Generate final comprehensive report
         logger.info("\nGenerating final analysis report...")
         try:
@@ -331,7 +352,8 @@ class GeneticOptimizer(BaseOptimizer):
 
     def _evaluate_population(self, population: List, parameters: List[str],
                             bounds: Dict[str, Tuple[float, float]],
-                            generation: int = None) -> List[float]:
+                            generation: int = None,
+                            phase_name: str = None) -> List[float]:
         """Evaluate fitness of entire population in parallel"""
 
         logger.info(f"Evaluating population of {len(population)} individuals...")
@@ -355,6 +377,18 @@ class GeneticOptimizer(BaseOptimizer):
             if success and telemetry:
                 metrics = self.evaluator.evaluate_telemetry(telemetry)
                 fitness = metrics.fitness
+
+                # Apply hierarchical constraint penalty if enabled
+                if self.hierarchical_validator and phase_name:
+                    constraint_penalty = self.hierarchical_validator.get_constraint_penalty(
+                        phase_name=phase_name,
+                        params=param_sets[idx]
+                    )
+                    if constraint_penalty < 0:
+                        # Constraint violated - apply penalty
+                        logger.debug(f"Individual {idx}: constraint violation penalty = {constraint_penalty}")
+                        fitness += constraint_penalty
+
                 fitnesses.append(fitness)
             else:
                 # Failed simulation - very poor fitness

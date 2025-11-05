@@ -745,3 +745,220 @@ def generate_narrow_bounds(drone_params: Dict,
     logger.info("="*80 + "\n")
 
     return narrow_bounds
+
+
+def estimate_closed_loop_bandwidth(Kp: float, Ki: float, Kd: float,
+                                   inertia: float,
+                                   motor_gain: float = 1.0) -> float:
+    """
+    Estimate closed-loop bandwidth for a PID-controlled second-order system
+
+    For a PID controller on a double integrator (typical for attitude control):
+    - Open loop: G(s) = motor_gain / (I * s^2)
+    - Controller: C(s) = Kd*s^2 + Kp*s + Ki
+    - Closed-loop bandwidth ≈ natural frequency ω_n for critically damped
+
+    Args:
+        Kp: Proportional gain
+        Ki: Integral gain
+        Kd: Derivative gain
+        inertia: System inertia (kg·m²)
+        motor_gain: Motor torque gain (N·m per control unit)
+
+    Returns:
+        Estimated closed-loop bandwidth in Hz
+    """
+    # For PID on double integrator: ω_n ≈ sqrt(Kp * motor_gain / inertia)
+    if Kp <= 0 or inertia <= 0:
+        return 0.0
+
+    omega_n = sqrt(Kp * motor_gain / inertia)  # rad/s
+    bandwidth_hz = omega_n / (2 * pi)
+
+    return bandwidth_hz
+
+
+def estimate_attitude_loop_bandwidth(Kp: float, rate_loop_bandwidth_hz: float) -> float:
+    """
+    Estimate attitude loop bandwidth
+
+    Attitude loop is a P-only controller that commands rate.
+    The closed-loop bandwidth is approximately Kp for well-tuned systems.
+
+    Args:
+        Kp: Attitude P gain (deg/s per degree)
+        rate_loop_bandwidth_hz: Inner rate loop bandwidth in Hz
+
+    Returns:
+        Estimated closed-loop bandwidth in Hz
+    """
+    if Kp <= 0:
+        return 0.0
+
+    # For P controller: BW ≈ Kp / (2π) in Hz
+    # But limited by inner rate loop bandwidth
+    attitude_bw_hz = Kp / (2 * pi)
+
+    # Cannot exceed rate loop bandwidth / 5 (cascade rule)
+    max_attitude_bw = rate_loop_bandwidth_hz / 5.0
+    attitude_bw_hz = min(attitude_bw_hz, max_attitude_bw)
+
+    return attitude_bw_hz
+
+
+def estimate_position_loop_bandwidth(position_P: float,
+                                    velocity_P: float,
+                                    attitude_loop_bandwidth_hz: float) -> float:
+    """
+    Estimate position loop bandwidth
+
+    Position loop: Position P controller -> Velocity PID -> Attitude
+
+    Args:
+        position_P: Position P gain (m/s per meter)
+        velocity_P: Velocity P gain
+        attitude_loop_bandwidth_hz: Middle attitude loop bandwidth in Hz
+
+    Returns:
+        Estimated closed-loop bandwidth in Hz
+    """
+    if position_P <= 0 or velocity_P <= 0:
+        return 0.0
+
+    # Position loop BW ≈ position_P / (2π)
+    position_bw_hz = position_P / (2 * pi)
+
+    # Cannot exceed attitude loop bandwidth / 4 (cascade rule)
+    max_position_bw = attitude_loop_bandwidth_hz / 4.0
+    position_bw_hz = min(position_bw_hz, max_position_bw)
+
+    return position_bw_hz
+
+
+def check_bandwidth_separation(inner_bw_hz: float,
+                               outer_bw_hz: float,
+                               min_ratio: float = 5.0,
+                               max_ratio: float = 10.0) -> Tuple[bool, float]:
+    """
+    Check if bandwidth separation meets cascade control requirements
+
+    For stable cascade control, inner loop must be significantly faster
+    than outer loop (typically 5-10x).
+
+    Args:
+        inner_bw_hz: Inner loop bandwidth in Hz
+        outer_bw_hz: Outer loop bandwidth in Hz
+        min_ratio: Minimum required ratio (default 5.0)
+        max_ratio: Maximum recommended ratio (default 10.0)
+
+    Returns:
+        Tuple of (is_valid, actual_ratio)
+    """
+    if inner_bw_hz <= 0 or outer_bw_hz <= 0:
+        return False, 0.0
+
+    ratio = inner_bw_hz / outer_bw_hz
+
+    # Check if ratio is within acceptable range
+    is_valid = min_ratio <= ratio <= max_ratio
+
+    return is_valid, ratio
+
+
+def validate_cascade_bandwidths(rate_params: Dict[str, float],
+                                attitude_params: Dict[str, float],
+                                position_params: Dict[str, float],
+                                drone_params: Dict[str, float],
+                                strict_mode: bool = True) -> Dict[str, any]:
+    """
+    Validate bandwidth separation across all cascade control loops
+
+    Args:
+        rate_params: Rate controller parameters (ATC_RAT_RLL_P, I, D, etc.)
+        attitude_params: Attitude controller parameters (ATC_ANG_RLL_P, etc.)
+        position_params: Position controller parameters (PSC_POSXY_P, PSC_VELXY_P, etc.)
+        drone_params: Drone physical parameters (Ixx, Iyy, etc.)
+        strict_mode: If True, enforce strict separation constraints
+
+    Returns:
+        Dictionary with validation results and bandwidth estimates
+    """
+    logger.info("Validating cascade control bandwidth separation...")
+
+    # Calculate motor torque gain
+    max_thrust = drone_params.get('max_thrust_per_motor', 75.0)
+    arm_length = drone_params.get('arm_length', 0.75)
+    motor_gain = max_thrust * arm_length
+
+    results = {
+        'valid': True,
+        'violations': [],
+        'bandwidths': {},
+        'ratios': {}
+    }
+
+    # ===== RATE LOOP BANDWIDTH =====
+    rate_P = rate_params.get('ATC_RAT_RLL_P', 0.15)
+    rate_I = rate_params.get('ATC_RAT_RLL_I', 0.15)
+    rate_D = rate_params.get('ATC_RAT_RLL_D', 0.005)
+    inertia_roll = drone_params.get('Ixx', 6.0)
+
+    rate_bw = estimate_closed_loop_bandwidth(rate_P, rate_I, rate_D, inertia_roll, motor_gain)
+    results['bandwidths']['rate'] = rate_bw
+
+    logger.info(f"  Rate loop bandwidth: {rate_bw:.2f} Hz")
+
+    # ===== ATTITUDE LOOP BANDWIDTH =====
+    attitude_P = attitude_params.get('ATC_ANG_RLL_P', 4.5)
+
+    attitude_bw = estimate_attitude_loop_bandwidth(attitude_P, rate_bw)
+    results['bandwidths']['attitude'] = attitude_bw
+
+    logger.info(f"  Attitude loop bandwidth: {attitude_bw:.2f} Hz")
+
+    # Check rate/attitude separation
+    rate_attitude_valid, rate_attitude_ratio = check_bandwidth_separation(
+        rate_bw, attitude_bw, min_ratio=4.0, max_ratio=15.0
+    )
+    results['ratios']['rate_to_attitude'] = rate_attitude_ratio
+
+    if not rate_attitude_valid:
+        msg = f"Rate/Attitude bandwidth separation violated: {rate_attitude_ratio:.2f}x (required: 4-15x)"
+        results['violations'].append(msg)
+        logger.warning(f"  ✗ {msg}")
+        if strict_mode:
+            results['valid'] = False
+    else:
+        logger.info(f"  ✓ Rate/Attitude separation: {rate_attitude_ratio:.2f}x")
+
+    # ===== POSITION LOOP BANDWIDTH =====
+    position_P = position_params.get('PSC_POSXY_P', 1.0)
+    velocity_P = position_params.get('PSC_VELXY_P', 2.0)
+
+    position_bw = estimate_position_loop_bandwidth(position_P, velocity_P, attitude_bw)
+    results['bandwidths']['position'] = position_bw
+
+    logger.info(f"  Position loop bandwidth: {position_bw:.2f} Hz")
+
+    # Check attitude/position separation
+    attitude_position_valid, attitude_position_ratio = check_bandwidth_separation(
+        attitude_bw, position_bw, min_ratio=3.0, max_ratio=8.0
+    )
+    results['ratios']['attitude_to_position'] = attitude_position_ratio
+
+    if not attitude_position_valid:
+        msg = f"Attitude/Position bandwidth separation violated: {attitude_position_ratio:.2f}x (required: 3-8x)"
+        results['violations'].append(msg)
+        logger.warning(f"  ✗ {msg}")
+        if strict_mode:
+            results['valid'] = False
+    else:
+        logger.info(f"  ✓ Attitude/Position separation: {attitude_position_ratio:.2f}x")
+
+    # Overall summary
+    if results['valid']:
+        logger.info("✓ All bandwidth separation constraints satisfied")
+    else:
+        logger.error(f"✗ Bandwidth validation failed: {len(results['violations'])} violations")
+
+    return results

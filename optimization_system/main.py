@@ -59,6 +59,11 @@ def main():
                         choices=['wide', 'narrow', 'adaptive'],
                         help='Parameter bounds mode: wide (comprehensive search), '
                              'narrow (±30%% around physics values), adaptive (expand as needed)')
+    parser.add_argument('--hierarchical-constraints', action='store_true', default=True,
+                        help='Enforce bandwidth separation constraints for cascade control (default: True)')
+    parser.add_argument('--no-hierarchical-constraints', dest='hierarchical_constraints',
+                        action='store_false',
+                        help='Disable hierarchical bandwidth constraints')
 
     args = parser.parse_args()
 
@@ -81,6 +86,9 @@ def main():
     logger.info(f"Bounds Mode: {args.bounds_mode}")
     if args.bounds_mode in config.BOUNDS_MODE_CONFIG:
         logger.info(f"  {config.BOUNDS_MODE_CONFIG[args.bounds_mode]['description']}")
+    logger.info(f"Hierarchical Constraints: {'Enabled' if args.hierarchical_constraints else 'Disabled'}")
+    if args.hierarchical_constraints:
+        logger.info("  Enforcing bandwidth separation: Rate > 4-15x Attitude > 3-8x Position")
 
     # Initialize components
     logger.info("\nInitializing components...")
@@ -107,7 +115,8 @@ def main():
             max_generations=args.generations,
             population_size=config.OPTIMIZATION_CONFIG['population_size'],
             drone_params=config.DRONE_PARAMS,  # Enable physics-based seeding
-            use_physics_seeding=True  # Use control theory to seed population
+            use_physics_seeding=True,  # Use control theory to seed population
+            enforce_hierarchical_constraints=args.hierarchical_constraints  # Bandwidth separation constraints
         )
     else:
         optimizer = BayesianOptimizer(
@@ -174,6 +183,25 @@ def main():
         sitl_manager=sitl_manager,
         parameters=final_params
     )
+
+    # Validate hierarchical bandwidth separation
+    if args.hierarchical_constraints and args.algorithm == 'genetic':
+        logger.info("\nValidating cascade control bandwidth separation...")
+        if optimizer.hierarchical_validator:
+            cascade_validation = optimizer.hierarchical_validator.get_full_system_validation()
+            validation_results['cascade_bandwidth'] = cascade_validation
+
+            if cascade_validation.get('valid', False):
+                logger.info("✓ All cascade bandwidth constraints satisfied")
+                bw = cascade_validation.get('bandwidths', {})
+                ratios = cascade_validation.get('ratios', {})
+                logger.info(f"  Rate loop:     {bw.get('rate', 0):.2f} Hz")
+                logger.info(f"  Attitude loop: {bw.get('attitude', 0):.2f} Hz (separation: {ratios.get('rate_to_attitude', 0):.2f}x)")
+                logger.info(f"  Position loop: {bw.get('position', 0):.2f} Hz (separation: {ratios.get('attitude_to_position', 0):.2f}x)")
+            else:
+                logger.warning("✗ Cascade bandwidth validation failed")
+                for violation in cascade_validation.get('violations', []):
+                    logger.warning(f"  {violation}")
 
     # Save final results
     final_output = {
