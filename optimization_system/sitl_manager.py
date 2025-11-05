@@ -562,7 +562,7 @@ class SITLManager:
             duration: Maximum simulation duration
 
         Returns:
-            (success, telemetry_data)
+            (success, telemetry_data) - telemetry includes verified parameters from .bin log
         """
         # Check if shutdown was requested
         if SITLManager._shutdown_requested:
@@ -571,12 +571,19 @@ class SITLManager:
 
         instance = self.instances[instance_id]
 
+        # Store temp directory for .bin file extraction
+        temp_dir = f"/tmp/sitl_instance_{instance_id}"
+
         # Try warm-start first (much faster)
         if self.warm_start and instance_id in self.warm_instances_ready:
             if self._warm_update_parameters(instance_id, parameters):
                 # Warm update successful, run test directly
                 try:
                     success, telemetry = test_sequence(instance.connection, duration)
+
+                    # Extract parameters from .bin log for verification
+                    self._add_bin_log_verification(telemetry, temp_dir, parameters, instance_id)
+
                     return success, telemetry
                 except Exception as e:
                     logger.error(f"Warm simulation failed on instance {instance_id}: {e}")
@@ -594,6 +601,9 @@ class SITLManager:
             # Run test sequence and collect telemetry
             success, telemetry = test_sequence(instance.connection, duration)
 
+            # Extract parameters from .bin log for verification
+            self._add_bin_log_verification(telemetry, temp_dir, parameters, instance_id)
+
             return success, telemetry
 
         except Exception as e:
@@ -603,6 +613,83 @@ class SITLManager:
         finally:
             # Stop instance (respects warm-start mode)
             self.stop_instance(instance_id)
+
+    def _add_bin_log_verification(self, telemetry: Dict, temp_dir: str,
+                                   intended_params: Dict[str, float],
+                                   instance_id: int) -> None:
+        """
+        Extract parameters from .bin log file and add verification to telemetry.
+
+        This provides proof that parameters were actually applied during flight.
+
+        Args:
+            telemetry: Telemetry dictionary to add verification data to
+            temp_dir: Temporary directory where .bin logs are stored
+            intended_params: Parameters we intended to set
+            instance_id: Instance ID for logging
+        """
+        try:
+            from bin_log_analyzer import BinLogAnalyzer
+
+            # Find latest .bin log in temp directory
+            bin_file = BinLogAnalyzer.find_latest_bin_log(temp_dir)
+
+            if not bin_file:
+                logger.warning(f"No .bin log found for instance {instance_id} in {temp_dir}")
+                telemetry['bin_log_params'] = {}
+                telemetry['param_verification'] = {
+                    'all_match': False,
+                    'error': 'No .bin log found'
+                }
+                return
+
+            # Extract parameters from .bin log
+            actual_params = BinLogAnalyzer.extract_parameters(bin_file)
+
+            if not actual_params:
+                logger.warning(f"Could not extract parameters from {bin_file}")
+                telemetry['bin_log_params'] = {}
+                telemetry['param_verification'] = {
+                    'all_match': False,
+                    'error': 'Failed to extract parameters'
+                }
+                return
+
+            # Store actual parameters from log
+            telemetry['bin_log_params'] = actual_params
+            telemetry['bin_log_file'] = bin_file
+
+            # Verify intended vs actual
+            if intended_params:
+                verification = BinLogAnalyzer.verify_parameters_match(
+                    intended_params,
+                    actual_params
+                )
+                telemetry['param_verification'] = verification
+
+                if verification['all_match']:
+                    logger.info(f"✓ All {verification['match_count']} parameters verified from .bin log")
+                else:
+                    logger.warning(
+                        f"⚠ Parameter verification: {verification['match_count']}/{verification['total_count']} match "
+                        f"({verification['verification_rate']:.1%})"
+                    )
+            else:
+                # No intended parameters to verify (e.g., default run)
+                telemetry['param_verification'] = {
+                    'all_match': True,
+                    'match_count': 0,
+                    'total_count': 0,
+                    'note': 'No intended parameters to verify'
+                }
+
+        except Exception as e:
+            logger.error(f"Failed to add .bin log verification: {e}")
+            telemetry['bin_log_params'] = {}
+            telemetry['param_verification'] = {
+                'all_match': False,
+                'error': str(e)
+            }
 
     def run_parallel_simulations(self, parameter_sets: List[Dict[str, float]],
                                 test_sequence: callable, duration: float = 60.0) -> List[Tuple[bool, Dict]]:

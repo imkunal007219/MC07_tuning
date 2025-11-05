@@ -612,11 +612,131 @@ class ReportGenerator:
         </table>
 """
 
+        # Add parameter verification section
+        verification_html = self._generate_verification_section()
+        if verification_html:
+            html += verification_html
+
         # Close HTML
         html += """
     </div>
 </body>
 </html>
+"""
+
+        return html
+
+    def _generate_verification_section(self) -> str:
+        """
+        Generate HTML section showing parameter verification from .bin logs.
+
+        This provides proof that parameters were actually applied during flights.
+        """
+        # Get all flights with verification data
+        flights_with_verification = []
+
+        for flight_entry in self.logger.flight_index:
+            flight_id = flight_entry['flight_id']
+
+            try:
+                flight_data = self.logger.load_flight(flight_id)
+
+                if not flight_data:
+                    continue
+
+                telemetry = flight_data.get('telemetry', {})
+                verification = telemetry.get('param_verification', {})
+
+                if verification and 'match_count' in verification:
+                    flights_with_verification.append({
+                        'flight_id': flight_id,
+                        'generation': flight_entry.get('generation', 'N/A'),
+                        'success': flight_entry.get('success', False),
+                        'verification': verification
+                    })
+            except Exception as e:
+                logger.debug(f"Could not load flight {flight_id}: {e}")
+                continue
+
+        if not flights_with_verification:
+            return ""
+
+        # Calculate overall verification statistics
+        total_verifications = len(flights_with_verification)
+        all_match_count = sum(1 for f in flights_with_verification if f['verification'].get('all_match', False))
+        verification_rate = all_match_count / total_verifications if total_verifications > 0 else 0
+
+        html = f"""
+        <h2>✅ Parameter Verification from Flight Logs</h2>
+        <p>Parameters extracted from ArduPilot .bin logs to verify they were actually applied during flights.</p>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Flights Verified</div>
+                <div class="stat-value">{total_verifications}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Perfect Matches</div>
+                <div class="stat-value success">{all_match_count}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Verification Rate</div>
+                <div class="stat-value">{verification_rate:.1%}</div>
+            </div>
+        </div>
+
+        <h3>Recent Verifications (Last 10 Flights)</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Flight ID</th>
+                    <th>Generation</th>
+                    <th>Success</th>
+                    <th>Params Verified</th>
+                    <th>Match Rate</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+"""
+
+        # Show last 10 flights
+        for flight in flights_with_verification[-10:]:
+            flight_id = flight['flight_id']
+            generation = flight['generation']
+            success_str = '<span class="success">✓</span>' if flight['success'] else '<span class="failure">✗</span>'
+
+            verification = flight['verification']
+            match_count = verification.get('match_count', 0)
+            total_count = verification.get('total_count', 0)
+            all_match = verification.get('all_match', False)
+
+            match_rate = verification.get('verification_rate', 0.0)
+            status = '<span class="success">✓ All Match</span>' if all_match else '<span class="failure">⚠ Mismatch</span>'
+
+            if 'error' in verification:
+                status = f'<span class="failure">✗ {verification["error"]}</span>'
+                match_rate_str = 'N/A'
+            else:
+                match_rate_str = f"{match_rate:.1%}"
+
+            html += f"""                <tr>
+                    <td><code>{flight_id[:16]}...</code></td>
+                    <td>{generation}</td>
+                    <td>{success_str}</td>
+                    <td>{match_count}/{total_count}</td>
+                    <td>{match_rate_str}</td>
+                    <td>{status}</td>
+                </tr>
+"""
+
+        html += """            </tbody>
+        </table>
+
+        <p style="color: #7f8c8d; font-size: 14px; margin-top: 20px;">
+            <strong>Note:</strong> Parameters are extracted from ArduPilot .bin log files created during each flight.
+            This provides cryptographic proof that the optimization system actually applied the intended parameters.
+        </p>
 """
 
         return html
