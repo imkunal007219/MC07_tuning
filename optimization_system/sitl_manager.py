@@ -405,39 +405,27 @@ class SITLManager:
     def _kill_instance(self, instance: SITLInstance):
         """Kill a SITL instance process"""
         try:
-            # Close MAVLink connection properly to avoid reconnect attempts
-            if instance.connection:
-                try:
-                    # Send a final message to cleanly close
-                    instance.connection.close()
-                except Exception as e:
-                    logger.debug(f"Error closing connection for instance {instance.instance_id}: {e}")
-                finally:
-                    instance.connection = None
-
-            # Give MAVProxy a moment to process the close
-            time.sleep(0.2)
+            # Don't bother with graceful connection close - just kill processes
+            # Graceful close can hang if MAVProxy is stuck reconnecting
+            instance.connection = None
 
             if instance.process and instance.process.pid:
-                # Kill entire process group (includes SITL, MAVProxy, and any child processes)
+                # Kill entire process group immediately with SIGKILL
                 try:
-                    logger.debug(f"Killing process group for instance {instance.instance_id} (PID: {instance.process.pid})")
+                    logger.debug(f"Force killing process group for instance {instance.instance_id} (PID: {instance.process.pid})")
 
-                    # Send SIGTERM for graceful shutdown
-                    os.killpg(os.getpgid(instance.process.pid), signal.SIGTERM)
+                    # Use SIGKILL immediately - no graceful shutdown
+                    os.killpg(os.getpgid(instance.process.pid), signal.SIGKILL)
 
-                    # Wait for process to terminate
+                    # Very short wait - process should die immediately with SIGKILL
                     try:
-                        instance.process.wait(timeout=3)
-                        logger.debug(f"Instance {instance.instance_id} terminated gracefully")
+                        instance.process.wait(timeout=0.5)
                     except subprocess.TimeoutExpired:
-                        # Force kill if still running
-                        logger.debug(f"Instance {instance.instance_id} did not terminate, forcing...")
-                        try:
-                            os.killpg(os.getpgid(instance.process.pid), signal.SIGKILL)
-                            instance.process.wait(timeout=2)
-                        except (ProcessLookupError, OSError):
-                            pass  # Process already terminated
+                        # Should not happen with SIGKILL, but just move on
+                        pass
+                    except (ProcessLookupError, OSError):
+                        pass  # Process already terminated
+
                 except (ProcessLookupError, OSError) as e:
                     # Process already terminated
                     logger.debug(f"Process {instance.instance_id} already terminated: {e}")
@@ -640,19 +628,29 @@ class SITLManager:
         # Set shutdown flag to prevent any new SITL starts
         SITLManager._shutdown_requested = True
 
+        # Kill all instances with short timeout per instance
         for instance in self.instances:
-            self._kill_instance(instance)
+            try:
+                self._kill_instance(instance)
+            except Exception as e:
+                logger.warning(f"Error killing instance {instance.instance_id}: {e}")
+                # Continue to next instance
 
         # No log files to close since we're not capturing output
         if hasattr(self, 'log_files'):
             self.log_files.clear()
 
-        # Nuclear cleanup: kill any remaining SITL/MAVProxy processes
+        # Nuclear cleanup: kill ANY remaining SITL/MAVProxy processes
+        # This is important - sometimes processes escape the process group kill
         logger.info("Killing any remaining SITL/MAVProxy processes...")
         try:
+            # Use pkill -9 (SIGKILL) for immediate termination
             os.system("pkill -9 arducopter 2>/dev/null")
-            os.system("pkill -9 mavproxy.py 2>/dev/null")
+            os.system("pkill -9 'mavproxy.py' 2>/dev/null")
+            os.system("pkill -9 python 2>/dev/null | grep -q mavproxy")  # Kill mavproxy python processes
             os.system("pkill -9 sim_vehicle 2>/dev/null")
+            # Also kill any xterm windows that might be hanging
+            os.system("pkill -9 xterm 2>/dev/null")
         except Exception as e:
             logger.warning(f"Error in nuclear cleanup: {e}")
 
@@ -663,9 +661,9 @@ class SITLManager:
             if os.path.exists(work_dir):
                 try:
                     import shutil
-                    shutil.rmtree(work_dir)
+                    shutil.rmtree(work_dir, ignore_errors=True)  # Don't fail on errors
                 except Exception as e:
-                    logger.warning(f"Failed to remove {work_dir}: {e}")
+                    logger.debug(f"Failed to remove {work_dir}: {e}")
 
         logger.info("Cleanup complete")
 
