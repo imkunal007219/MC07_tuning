@@ -43,13 +43,25 @@ def test_mission_sequence():
         # Note: MAVProxy console is shown by default
     )
 
+    instance_id = None  # Track instance for cleanup
+
     try:
         # Start SITL
         logger.info("\nStarting SITL instance...")
         instance_id = sitl_manager.get_instance(timeout=60)
 
         if instance_id is None:
-            logger.error("Failed to start SITL instance")
+            logger.error("Failed to get SITL instance from pool")
+            return False
+
+        logger.info(f"✓ Got instance {instance_id} from pool")
+
+        # Start the instance with default parameters
+        logger.info("Starting SITL process...")
+        default_params = {}  # Empty params - will use defaults from parameter file
+
+        if not sitl_manager.start_instance(instance_id, default_params):
+            logger.error("Failed to start SITL process")
             return False
 
         logger.info(f"✓ SITL instance {instance_id} started")
