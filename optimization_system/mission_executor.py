@@ -59,9 +59,9 @@ class MissionExecutor:
             logger.error("Failed to load waypoints")
             return False, {}
 
-        # Step 3: Wait 20 seconds for all sensors to get ready
-        logger.info("Waiting 20 seconds for sensors to initialize...")
-        if not self._wait_for_sensors_ready(timeout=20):
+        # Step 3: Wait for all sensors to get ready (increased timeout for fresh SITL)
+        logger.info("Waiting 30 seconds for sensors to initialize...")
+        if not self._wait_for_sensors_ready(timeout=30):
             logger.warning("Sensor initialization timeout - proceeding anyway")
 
         # Step 4: Set mode AUTO (BEFORE arming)
@@ -133,15 +133,53 @@ class MissionExecutor:
             0, 0, 0, 0, 0, 0
         )
 
-        # Wait for armed confirmation
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            msg = self.connection.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
-            if msg and (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
-                logger.info("✓ Vehicle armed")
-                return True
+        logger.debug("ARM command sent, waiting for response...")
 
-        logger.error("Arming timeout")
+        # Wait for armed confirmation or command acknowledgement
+        start_time = time.time()
+        arm_ack_received = False
+
+        while time.time() - start_time < timeout:
+            # Check all message types
+            msg = self.connection.recv_match(blocking=True, timeout=1)
+
+            if msg is None:
+                continue
+
+            msg_type = msg.get_type()
+
+            # Check for command acknowledgement
+            if msg_type == 'COMMAND_ACK':
+                if msg.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM:
+                    arm_ack_received = True
+                    if msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+                        logger.debug("ARM command accepted by vehicle")
+                    else:
+                        # Arm command was rejected
+                        result_str = {
+                            mavutil.mavlink.MAV_RESULT_DENIED: "DENIED",
+                            mavutil.mavlink.MAV_RESULT_UNSUPPORTED: "UNSUPPORTED",
+                            mavutil.mavlink.MAV_RESULT_TEMPORARILY_REJECTED: "TEMPORARILY_REJECTED",
+                            mavutil.mavlink.MAV_RESULT_FAILED: "FAILED"
+                        }.get(msg.result, f"UNKNOWN({msg.result})")
+                        logger.error(f"ARM command rejected: {result_str}")
+                        logger.error("Check MAVProxy console for pre-arm check failures")
+                        return False
+
+            # Check if vehicle actually armed
+            elif msg_type == 'HEARTBEAT':
+                if msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED:
+                    logger.info("✓ Vehicle armed")
+                    return True
+
+        # Timeout - provide helpful error message
+        if arm_ack_received:
+            logger.error("Arming timeout - command was accepted but vehicle did not arm")
+            logger.error("Vehicle may still be completing pre-arm checks")
+        else:
+            logger.error("Arming timeout - no response from vehicle")
+            logger.error("Check SITL is running and connection is stable")
+
         return False
 
     def _disarm_vehicle(self):
