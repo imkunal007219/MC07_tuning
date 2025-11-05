@@ -1,0 +1,18 @@
+# Python dependencies for MC07 Drone PID Optimization System
+
+# Core optimization libraries
+optuna>=3.0.0               # Bayesian optimization
+deap>=1.3.0                 # Genetic algorithms
+numpy>=1.20.0               # Numerical computing
+scipy>=1.7.0                # Scientific computing
+
+# Drone communication
+dronekit>=2.9.2             # DroneKit-Python for MAVLink
+pymavlink>=2.4.0            # MAVLink protocol
+
+# Data handling and visualization
+matplotlib>=3.3.0           # Plotting and visualization
+pandas>=1.3.0               # Data manipulation (optional but useful)
+
+# System and logging
+psutil>=5.8.0               # System monitoring
