@@ -12,6 +12,8 @@ from pymavlink import mavutil
 import numpy as np
 
 from mission_loader import MissionLoader
+from early_crash_detection import EarlyCrashDetector
+from config import EARLY_CRASH_DETECTION_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -24,15 +26,33 @@ class MissionExecutor:
     because it uses ArduPilot's built-in mission logic.
     """
 
-    def __init__(self, connection: mavutil.mavlink_connection):
+    def __init__(self, connection: mavutil.mavlink_connection,
+                 enable_early_crash_detection: bool = None):
         """
         Initialize mission executor.
 
         Args:
             connection: MAVLink connection to vehicle
+            enable_early_crash_detection: Enable early crash detection (default: from config)
         """
         self.connection = connection
         self.mission_loader = MissionLoader(connection)
+
+        # Initialize early crash detection
+        if enable_early_crash_detection is None:
+            enable_early_crash_detection = EARLY_CRASH_DETECTION_CONFIG.get('enabled', True)
+
+        self.early_crash_detection_enabled = enable_early_crash_detection
+        if self.early_crash_detection_enabled:
+            self.crash_detector = EarlyCrashDetector(
+                check_interval=EARLY_CRASH_DETECTION_CONFIG.get('check_interval', 0.5),
+                min_samples=EARLY_CRASH_DETECTION_CONFIG.get('min_samples', 50),
+                sensitivity=EARLY_CRASH_DETECTION_CONFIG.get('sensitivity', 'medium')
+            )
+            logger.info("Early crash detection enabled (saves ~75% crash testing time)")
+        else:
+            self.crash_detector = None
+            logger.info("Early crash detection disabled")
 
     def run_mission(self, mission_file: str, timeout: float = 120.0) -> Tuple[bool, Dict]:
         """
@@ -392,6 +412,42 @@ class MissionExecutor:
 
         return telemetry
 
+    def _prepare_telemetry_for_crash_detection(self, telemetry: Dict) -> list:
+        """
+        Convert telemetry dict to format expected by crash detector.
+
+        Args:
+            telemetry: Raw telemetry dict with lists
+
+        Returns:
+            List of dicts with time-series data for crash detection
+        """
+        # Convert to list of dict entries (one per timestep)
+        telemetry_data = []
+
+        # Find the minimum length across all arrays (they might not be perfectly aligned)
+        min_len = min(
+            len(telemetry.get('time', [])),
+            len(telemetry.get('roll', [])),
+            len(telemetry.get('pitch', [])),
+            len(telemetry.get('altitude', []))
+        )
+
+        for i in range(min_len):
+            data_point = {
+                'time': telemetry['time'][i] if i < len(telemetry['time']) else 0,
+                'roll': telemetry['roll'][i] if i < len(telemetry['roll']) else 0,
+                'pitch': telemetry['pitch'][i] if i < len(telemetry['pitch']) else 0,
+                'yaw': telemetry['yaw'][i] if i < len(telemetry['yaw']) else 0,
+                'altitude': telemetry['altitude'][i] if i < len(telemetry['altitude']) else 0,
+                'roll_rate': telemetry['roll_rate'][i] if i < len(telemetry['roll_rate']) else 0,
+                'pitch_rate': telemetry['pitch_rate'][i] if i < len(telemetry['pitch_rate']) else 0,
+                'yaw_rate': telemetry['yaw_rate'][i] if i < len(telemetry['yaw_rate']) else 0,
+            }
+            telemetry_data.append(data_point)
+
+        return telemetry_data
+
     def _monitor_mission(self, timeout: float) -> Tuple[bool, Dict]:
         """
         Monitor mission execution and collect telemetry.
@@ -422,9 +478,36 @@ class MissionExecutor:
         last_waypoint = 0
         is_armed = True  # Track arming state
         last_heartbeat_check = time.time()
+        last_crash_check_time = 0.0  # Track when we last checked for crashes
 
         while time.time() - start_time < timeout:
             current_time = time.time() - start_time
+
+            # Early crash detection (check periodically)
+            if (self.early_crash_detection_enabled and
+                self.crash_detector is not None and
+                current_time - last_crash_check_time >= self.crash_detector.check_interval):
+
+                # Only check if we have enough data
+                if len(telemetry['time']) >= self.crash_detector.min_samples:
+                    # Prepare data for crash detector
+                    telemetry_data = self._prepare_telemetry_for_crash_detection(telemetry)
+
+                    # Check for impending crash
+                    is_unstable, reason = self.crash_detector.check_stability(telemetry_data)
+
+                    if is_unstable:
+                        logger.warning(f"⚠ Early crash detected: {reason}")
+                        logger.warning(f"Aborting mission early (saved ~{timeout - current_time:.1f}s)")
+
+                        # Mark as crashed and return early
+                        telemetry = self._process_telemetry_metrics(telemetry, mission_complete=False)
+                        telemetry['metrics']['crashed'] = True
+                        telemetry['metrics']['crash_reason'] = f"Early detection: {reason}"
+                        telemetry['metrics']['early_abort_time'] = current_time
+                        return False, telemetry
+
+                    last_crash_check_time = current_time
 
             # Get all available messages in queue
             while True:

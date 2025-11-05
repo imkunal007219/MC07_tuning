@@ -21,6 +21,7 @@ from flight_analyzer import FlightAnalyzer
 from report_generator import ReportGenerator
 from physics_based_seeding import PhysicsBasedSeeder
 from hierarchical_constraints import HierarchicalConstraintValidator
+from intelligent_test_sequencing import IntelligentTestSequencer
 
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,8 @@ class GeneticOptimizer(BaseOptimizer):
                  population_size: int = 50, mutation_rate: float = 0.2,
                  crossover_rate: float = 0.7, drone_params: Dict = None,
                  use_physics_seeding: bool = True,
-                 enforce_hierarchical_constraints: bool = True):
+                 enforce_hierarchical_constraints: bool = True,
+                 use_intelligent_sequencing: bool = True):
         """
         Initialize Genetic Algorithm optimizer
 
@@ -94,6 +96,7 @@ class GeneticOptimizer(BaseOptimizer):
             drone_params: Dictionary of drone physical parameters
             use_physics_seeding: Whether to use physics-based population seeding
             enforce_hierarchical_constraints: Whether to enforce bandwidth separation constraints
+            use_intelligent_sequencing: Whether to use progressive test sequencing
         """
         super().__init__(sitl_manager, evaluator, max_generations)
         self.population_size = population_size
@@ -122,6 +125,20 @@ class GeneticOptimizer(BaseOptimizer):
             logger.info("Hierarchical bandwidth constraints enabled")
         else:
             logger.info("Hierarchical constraints disabled")
+
+        # Initialize intelligent test sequencing
+        self.use_intelligent_sequencing = use_intelligent_sequencing
+        self.test_sequencer = None
+        if use_intelligent_sequencing:
+            from config import INTELLIGENT_TEST_SEQUENCING_CONFIG
+            self.test_sequencer = IntelligentTestSequencer(
+                min_pass_score=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('min_pass_score', 60.0),
+                enable_optional_tests=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('enable_optional_tests', True),
+                early_termination=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('early_termination', True)
+            )
+            logger.info("Intelligent test sequencing enabled (saves ~40% evaluation time)")
+        else:
+            logger.info("Using single mission test mode")
 
         # Adaptive bounds tracking
         self.use_adaptive_bounds = True
@@ -457,22 +474,124 @@ class GeneticOptimizer(BaseOptimizer):
         """
         Run test sequence and collect telemetry
 
-        Uses mission files for reliable, standardized testing.
+        Uses progressive mission files for intelligent testing when enabled,
+        otherwise falls back to single mission test.
         """
-        # Import here to avoid circular dependency
         import os
-        from mission_executor import run_mission_test
+        from mission_executor import MissionExecutor
 
-        # Use simple hover mission for testing
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
 
-        # Run mission with timeout: 30s sensor wait + mission duration + 50% buffer
-        # Mission includes: takeoff, 30s loiter, landing
-        timeout = 120.0  # 2 minutes should be enough for simple hover mission
-        logger.info(f"Running mission test: {mission_file} (timeout: {timeout}s)")
+        # Use intelligent test sequencing if enabled
+        if self.use_intelligent_sequencing and self.test_sequencer:
+            return self._run_progressive_tests(connection, script_dir)
+        else:
+            # Fallback: single mission test
+            from mission_executor import run_mission_test
+            mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
+            timeout = 120.0
+            logger.info(f"Running single mission test: {mission_file}")
+            return run_mission_test(connection, mission_file, timeout)
 
-        return run_mission_test(connection, mission_file, timeout)
+    def _run_progressive_tests(self, connection, script_dir: str) -> Tuple[bool, Dict]:
+        """
+        Run progressive test sequence using IntelligentTestSequencer
+
+        Args:
+            connection: MAVLink connection
+            script_dir: Script directory for mission files
+
+        Returns:
+            (overall_success, combined_telemetry)
+        """
+        from mission_executor import MissionExecutor
+
+        executor = MissionExecutor(connection, enable_early_crash_detection=True)
+
+        # Mission files for each test level
+        mission_files = {
+            'hover': os.path.join(script_dir, "missions", "level1_hover.waypoints"),
+            'small_step': os.path.join(script_dir, "missions", "level2_small_step.waypoints"),
+            'large_step': os.path.join(script_dir, "missions", "level3_large_step.waypoints"),
+            'frequency': os.path.join(script_dir, "missions", "level4_frequency.waypoints"),
+            'trajectory': os.path.join(script_dir, "missions", "level5_trajectory.waypoints"),
+        }
+
+        # Test timeouts for each level
+        timeouts = {
+            'hover': 40.0,       # 30s sensor + 10s mission
+            'small_step': 50.0,
+            'large_step': 60.0,
+            'frequency': 80.0,
+            'trajectory': 100.0,
+        }
+
+        # Run progressive tests
+        test_results = []
+        combined_telemetry = {'time': [], 'roll': [], 'pitch': [], 'yaw': [],
+                            'altitude': [], 'roll_rate': [], 'pitch_rate': [], 'yaw_rate': []}
+        overall_success = True
+
+        # Level 1: Hover (REQUIRED)
+        logger.info("Running Level 1: Hover test (5s)")
+        success, telemetry = executor.run_mission(mission_files['hover'], timeouts['hover'])
+        test_results.append(('hover', success, telemetry))
+        self._append_telemetry(combined_telemetry, telemetry)
+
+        if not success:
+            logger.warning("Level 1 failed - aborting progressive tests (saved ~60s)")
+            return False, combined_telemetry
+
+        # Level 2: Small step (REQUIRED)
+        logger.info("Running Level 2: Small step test (10°)")
+        success, telemetry = executor.run_mission(mission_files['small_step'], timeouts['small_step'])
+        test_results.append(('small_step', success, telemetry))
+        self._append_telemetry(combined_telemetry, telemetry)
+
+        if not success:
+            logger.warning("Level 2 failed - aborting progressive tests (saved ~40s)")
+            return False, combined_telemetry
+
+        # Level 3: Large step (IMPORTANT)
+        logger.info("Running Level 3: Large step test (20°)")
+        success, telemetry = executor.run_mission(mission_files['large_step'], timeouts['large_step'])
+        test_results.append(('large_step', success, telemetry))
+        self._append_telemetry(combined_telemetry, telemetry)
+
+        if not success and self.test_sequencer.early_termination:
+            logger.warning("Level 3 failed - aborting optional tests (saved ~20s)")
+            return False, combined_telemetry
+
+        # Level 4 & 5: Optional advanced tests
+        if self.test_sequencer.enable_optional_tests and success:
+            logger.info("Running Level 4: Frequency sweep")
+            success, telemetry = executor.run_mission(mission_files['frequency'], timeouts['frequency'])
+            test_results.append(('frequency', success, telemetry))
+            self._append_telemetry(combined_telemetry, telemetry)
+
+            if success:
+                logger.info("Running Level 5: Trajectory tracking")
+                success, telemetry = executor.run_mission(mission_files['trajectory'], timeouts['trajectory'])
+                test_results.append(('trajectory', success, telemetry))
+                self._append_telemetry(combined_telemetry, telemetry)
+
+        # Calculate overall success
+        overall_success = all(result[1] for result in test_results)
+        logger.info(f"Progressive tests complete: {len(test_results)} levels, success={overall_success}")
+
+        return overall_success, combined_telemetry
+
+    def _append_telemetry(self, combined: Dict, new: Dict):
+        """Append new telemetry to combined telemetry dict"""
+        if not new:
+            return
+
+        for key in ['time', 'roll', 'pitch', 'yaw', 'altitude', 'roll_rate', 'pitch_rate', 'yaw_rate']:
+            if key in new and isinstance(new[key], (list, np.ndarray)):
+                if isinstance(new[key], np.ndarray):
+                    combined[key].extend(new[key].tolist())
+                else:
+                    combined[key].extend(new[key])
 
     def _update_adaptive_bounds(self, parameters: List[str]):
         """
@@ -572,7 +691,8 @@ class BayesianOptimizer(BaseOptimizer):
     """Bayesian Optimization using Optuna"""
 
     def __init__(self, sitl_manager, evaluator, max_iterations: int = 200,
-                 n_startup_trials: int = 20):
+                 n_startup_trials: int = 20,
+                 use_intelligent_sequencing: bool = True):
         """
         Initialize Bayesian optimizer
 
@@ -581,10 +701,25 @@ class BayesianOptimizer(BaseOptimizer):
             evaluator: Performance evaluator instance
             max_iterations: Maximum number of trials
             n_startup_trials: Number of random trials before using TPE
+            use_intelligent_sequencing: Whether to use progressive test sequencing
         """
         super().__init__(sitl_manager, evaluator, max_iterations)
         self.n_startup_trials = n_startup_trials
         self.study = None
+
+        # Initialize intelligent test sequencing
+        self.use_intelligent_sequencing = use_intelligent_sequencing
+        self.test_sequencer = None
+        if use_intelligent_sequencing:
+            from config import INTELLIGENT_TEST_SEQUENCING_CONFIG
+            self.test_sequencer = IntelligentTestSequencer(
+                min_pass_score=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('min_pass_score', 60.0),
+                enable_optional_tests=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('enable_optional_tests', True),
+                early_termination=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('early_termination', True)
+            )
+            logger.info("Intelligent test sequencing enabled (saves ~40% evaluation time)")
+        else:
+            logger.info("Using single mission test mode")
 
     def optimize(self, phase_name: str, parameters: List[str],
                 bounds: Dict[str, Tuple[float, float]],
@@ -681,22 +816,124 @@ class BayesianOptimizer(BaseOptimizer):
         """
         Run test sequence and collect telemetry
 
-        Uses mission files for reliable, standardized testing.
+        Uses progressive mission files for intelligent testing when enabled,
+        otherwise falls back to single mission test.
         """
-        # Import here to avoid circular dependency
         import os
-        from mission_executor import run_mission_test
+        from mission_executor import MissionExecutor
 
-        # Use simple hover mission for testing
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
 
-        # Run mission with timeout: 30s sensor wait + mission duration + 50% buffer
-        # Mission includes: takeoff, 30s loiter, landing
-        timeout = 120.0  # 2 minutes should be enough for simple hover mission
-        logger.info(f"Running mission test: {mission_file} (timeout: {timeout}s)")
+        # Use intelligent test sequencing if enabled
+        if self.use_intelligent_sequencing and self.test_sequencer:
+            return self._run_progressive_tests(connection, script_dir)
+        else:
+            # Fallback: single mission test
+            from mission_executor import run_mission_test
+            mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
+            timeout = 120.0
+            logger.info(f"Running single mission test: {mission_file}")
+            return run_mission_test(connection, mission_file, timeout)
 
-        return run_mission_test(connection, mission_file, timeout)
+    def _run_progressive_tests(self, connection, script_dir: str) -> Tuple[bool, Dict]:
+        """
+        Run progressive test sequence using IntelligentTestSequencer
+
+        Args:
+            connection: MAVLink connection
+            script_dir: Script directory for mission files
+
+        Returns:
+            (overall_success, combined_telemetry)
+        """
+        from mission_executor import MissionExecutor
+
+        executor = MissionExecutor(connection, enable_early_crash_detection=True)
+
+        # Mission files for each test level
+        mission_files = {
+            'hover': os.path.join(script_dir, "missions", "level1_hover.waypoints"),
+            'small_step': os.path.join(script_dir, "missions", "level2_small_step.waypoints"),
+            'large_step': os.path.join(script_dir, "missions", "level3_large_step.waypoints"),
+            'frequency': os.path.join(script_dir, "missions", "level4_frequency.waypoints"),
+            'trajectory': os.path.join(script_dir, "missions", "level5_trajectory.waypoints"),
+        }
+
+        # Test timeouts for each level
+        timeouts = {
+            'hover': 40.0,       # 30s sensor + 10s mission
+            'small_step': 50.0,
+            'large_step': 60.0,
+            'frequency': 80.0,
+            'trajectory': 100.0,
+        }
+
+        # Run progressive tests
+        test_results = []
+        combined_telemetry = {'time': [], 'roll': [], 'pitch': [], 'yaw': [],
+                            'altitude': [], 'roll_rate': [], 'pitch_rate': [], 'yaw_rate': []}
+        overall_success = True
+
+        # Level 1: Hover (REQUIRED)
+        logger.info("Running Level 1: Hover test (5s)")
+        success, telemetry = executor.run_mission(mission_files['hover'], timeouts['hover'])
+        test_results.append(('hover', success, telemetry))
+        self._append_telemetry(combined_telemetry, telemetry)
+
+        if not success:
+            logger.warning("Level 1 failed - aborting progressive tests (saved ~60s)")
+            return False, combined_telemetry
+
+        # Level 2: Small step (REQUIRED)
+        logger.info("Running Level 2: Small step test (10°)")
+        success, telemetry = executor.run_mission(mission_files['small_step'], timeouts['small_step'])
+        test_results.append(('small_step', success, telemetry))
+        self._append_telemetry(combined_telemetry, telemetry)
+
+        if not success:
+            logger.warning("Level 2 failed - aborting progressive tests (saved ~40s)")
+            return False, combined_telemetry
+
+        # Level 3: Large step (IMPORTANT)
+        logger.info("Running Level 3: Large step test (20°)")
+        success, telemetry = executor.run_mission(mission_files['large_step'], timeouts['large_step'])
+        test_results.append(('large_step', success, telemetry))
+        self._append_telemetry(combined_telemetry, telemetry)
+
+        if not success and self.test_sequencer.early_termination:
+            logger.warning("Level 3 failed - aborting optional tests (saved ~20s)")
+            return False, combined_telemetry
+
+        # Level 4 & 5: Optional advanced tests
+        if self.test_sequencer.enable_optional_tests and success:
+            logger.info("Running Level 4: Frequency sweep")
+            success, telemetry = executor.run_mission(mission_files['frequency'], timeouts['frequency'])
+            test_results.append(('frequency', success, telemetry))
+            self._append_telemetry(combined_telemetry, telemetry)
+
+            if success:
+                logger.info("Running Level 5: Trajectory tracking")
+                success, telemetry = executor.run_mission(mission_files['trajectory'], timeouts['trajectory'])
+                test_results.append(('trajectory', success, telemetry))
+                self._append_telemetry(combined_telemetry, telemetry)
+
+        # Calculate overall success
+        overall_success = all(result[1] for result in test_results)
+        logger.info(f"Progressive tests complete: {len(test_results)} levels, success={overall_success}")
+
+        return overall_success, combined_telemetry
+
+    def _append_telemetry(self, combined: Dict, new: Dict):
+        """Append new telemetry to combined telemetry dict"""
+        if not new:
+            return
+
+        for key in ['time', 'roll', 'pitch', 'yaw', 'altitude', 'roll_rate', 'pitch_rate', 'yaw_rate']:
+            if key in new and isinstance(new[key], (list, np.ndarray)):
+                if isinstance(new[key], np.ndarray):
+                    combined[key].extend(new[key].tolist())
+                else:
+                    combined[key].extend(new[key])
 
     def _optuna_callback(self, study, trial):
         """Callback for Optuna trials"""

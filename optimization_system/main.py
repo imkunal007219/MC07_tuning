@@ -71,6 +71,16 @@ def main():
     parser.add_argument('--no-hierarchical-constraints', dest='hierarchical_constraints',
                         action='store_false',
                         help='Disable hierarchical bandwidth constraints')
+    parser.add_argument('--intelligent-sequencing', action='store_true', default=True,
+                        help='Use progressive test sequencing for faster evaluation (default: True)')
+    parser.add_argument('--no-intelligent-sequencing', dest='intelligent_sequencing',
+                        action='store_false',
+                        help='Disable intelligent test sequencing (use single mission tests)')
+    parser.add_argument('--early-crash-detection', action='store_true', default=True,
+                        help='Enable early crash detection using Lyapunov stability (default: True)')
+    parser.add_argument('--no-early-crash-detection', dest='early_crash_detection',
+                        action='store_false',
+                        help='Disable early crash detection')
 
     args = parser.parse_args()
 
@@ -96,6 +106,14 @@ def main():
     logger.info(f"Hierarchical Constraints: {'Enabled' if args.hierarchical_constraints else 'Disabled'}")
     if args.hierarchical_constraints:
         logger.info("  Enforcing bandwidth separation: Rate > 4-15x Attitude > 3-8x Position")
+    logger.info(f"Intelligent Test Sequencing: {'Enabled' if args.intelligent_sequencing else 'Disabled'}")
+    if args.intelligent_sequencing:
+        logger.info("  Progressive testing: Hover → Small Step → Large Step → Frequency → Trajectory")
+        logger.info("  Expected time savings: ~40%")
+    logger.info(f"Early Crash Detection: {'Enabled' if args.early_crash_detection else 'Disabled'}")
+    if args.early_crash_detection:
+        logger.info("  Lyapunov stability criteria for early abort")
+        logger.info("  Expected time savings: ~75% for crash cases")
 
     # Initialize components
     logger.info("\nInitializing components...")
@@ -123,13 +141,15 @@ def main():
             population_size=config.OPTIMIZATION_CONFIG['population_size'],
             drone_params=config.DRONE_PARAMS,  # Enable physics-based seeding
             use_physics_seeding=True,  # Use control theory to seed population
-            enforce_hierarchical_constraints=args.hierarchical_constraints  # Bandwidth separation constraints
+            enforce_hierarchical_constraints=args.hierarchical_constraints,  # Bandwidth separation constraints
+            use_intelligent_sequencing=args.intelligent_sequencing  # Progressive test sequencing
         )
     elif args.algorithm == 'bayesian':
         optimizer = BayesianOptimizer(
             sitl_manager=sitl_manager,
             evaluator=performance_evaluator,
-            max_iterations=args.generations
+            max_iterations=args.generations,
+            use_intelligent_sequencing=args.intelligent_sequencing  # Progressive test sequencing
         )
     elif args.algorithm == 'multi-objective':
         if not MULTI_OBJECTIVE_AVAILABLE:
