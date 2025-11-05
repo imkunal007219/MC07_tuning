@@ -294,3 +294,74 @@ CONVERGENCE_CONFIG = {
     'stagnation_generations': 10,            # Stop if no improvement
     'target_fitness': 0.95,                  # Stop if reached
 }
+
+# ============================================================================
+# BOUNDS MODE CONFIGURATION
+# ============================================================================
+# The bounds in OPTIMIZATION_PHASES above are WIDE bounds for comprehensive search
+# Narrow bounds can be generated dynamically based on physics calculations
+
+BOUNDS_MODE_CONFIG = {
+    'wide': {
+        'description': 'Wide bounds for comprehensive search (original)',
+        'tolerance': None,  # Use bounds from OPTIMIZATION_PHASES as-is
+        'apply_stability_rules': False,
+    },
+    'narrow': {
+        'description': 'Narrow bounds ±30% around physics-based values',
+        'tolerance': 0.3,  # ±30% around expected values
+        'apply_stability_rules': True,  # Enforce D < P/10, I = 0.5-2.0×P, filter hierarchy
+    },
+    'adaptive': {
+        'description': 'Start narrow, expand if needed (not yet implemented)',
+        'tolerance': 0.3,
+        'apply_stability_rules': True,
+        'expansion_rate': 1.2,  # Expand by 20% each adaptation
+    }
+}
+
+
+def get_optimization_bounds(bounds_mode: str = 'wide'):
+    """
+    Get parameter bounds based on selected mode
+
+    Args:
+        bounds_mode: 'wide', 'narrow', or 'adaptive'
+
+    Returns:
+        Dictionary of optimization phases with bounds for each parameter
+    """
+    if bounds_mode == 'wide':
+        # Return original wide bounds from OPTIMIZATION_PHASES
+        return OPTIMIZATION_PHASES
+
+    elif bounds_mode == 'narrow':
+        # Generate narrow bounds dynamically using physics
+        from physics_based_seeding import generate_narrow_bounds
+
+        config = BOUNDS_MODE_CONFIG['narrow']
+        narrow_bounds_dict = generate_narrow_bounds(
+            drone_params=DRONE_PARAMS,
+            tolerance=config['tolerance'],
+            apply_stability_rules=config['apply_stability_rules']
+        )
+
+        # Merge narrow bounds with phase metadata from OPTIMIZATION_PHASES
+        result = {}
+        for phase_name, phase_config in OPTIMIZATION_PHASES.items():
+            result[phase_name] = {
+                'name': phase_config['name'],
+                'priority': phase_config['priority'],
+                'parameters': phase_config['parameters'],
+                'bounds': narrow_bounds_dict[phase_name]
+            }
+
+        return result
+
+    elif bounds_mode == 'adaptive':
+        # Start with narrow bounds (adaptive expansion not yet implemented)
+        # Future: Expand bounds during optimization if convergence stalls
+        return get_optimization_bounds('narrow')
+
+    else:
+        raise ValueError(f"Unknown bounds_mode: {bounds_mode}. Must be 'wide', 'narrow', or 'adaptive'")

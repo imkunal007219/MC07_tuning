@@ -55,6 +55,10 @@ def main():
                         help='SITL speedup factor')
     parser.add_argument('--resume', type=str, default=None,
                         help='Resume from checkpoint file')
+    parser.add_argument('--bounds-mode', type=str, default='narrow',
+                        choices=['wide', 'narrow', 'adaptive'],
+                        help='Parameter bounds mode: wide (comprehensive search), '
+                             'narrow (±30%% around physics values), adaptive (expand as needed)')
 
     args = parser.parse_args()
 
@@ -74,6 +78,9 @@ def main():
     logger.info(f"Max Generations: {args.generations}")
     logger.info(f"Parallel Instances: {args.parallel}")
     logger.info(f"SITL Speedup: {args.speedup}")
+    logger.info(f"Bounds Mode: {args.bounds_mode}")
+    if args.bounds_mode in config.BOUNDS_MODE_CONFIG:
+        logger.info(f"  {config.BOUNDS_MODE_CONFIG[args.bounds_mode]['description']}")
 
     # Initialize components
     logger.info("\nInitializing components...")
@@ -86,6 +93,11 @@ def main():
     sitl_manager_global = sitl_manager  # Store for signal handler
 
     performance_evaluator = PerformanceEvaluator()
+
+    # Get optimization phases with selected bounds mode
+    logger.info(f"\nLoading parameter bounds (mode: {args.bounds_mode})...")
+    optimization_phases = config.get_optimization_bounds(args.bounds_mode)
+    logger.info(f"✓ Loaded {len(optimization_phases)} optimization phases")
 
     # Select optimizer
     if args.algorithm == 'genetic':
@@ -115,10 +127,10 @@ def main():
 
     for phase_name in phases:
         logger.info("\n" + "="*80)
-        logger.info(f"STARTING PHASE: {config.OPTIMIZATION_PHASES[phase_name]['name']}")
+        logger.info(f"STARTING PHASE: {optimization_phases[phase_name]['name']}")
         logger.info("="*80)
 
-        phase_config = config.OPTIMIZATION_PHASES[phase_name]
+        phase_config = optimization_phases[phase_name]
 
         # Run optimization
         best_params, best_fitness, convergence_history = optimizer.optimize(
@@ -176,7 +188,7 @@ def main():
 
     # Generate parameter file
     param_file = f"{config.LOGGING_CONFIG['log_dir']}/optimized_params_{timestamp}.param"
-    generate_param_file(final_params, param_file)
+    generate_param_file(final_params, param_file, optimization_phases)
 
     logger.info("\n" + "="*80)
     logger.info("OPTIMIZATION COMPLETE!")
@@ -193,7 +205,7 @@ def main():
     return 0
 
 
-def generate_param_file(parameters, output_file):
+def generate_param_file(parameters, output_file, optimization_phases):
     """Generate ArduPilot parameter file"""
     with open(output_file, 'w') as f:
         f.write("# Optimized parameters for 30kg quadcopter\n")
@@ -201,7 +213,7 @@ def generate_param_file(parameters, output_file):
         f.write("#\n\n")
 
         # Group by category
-        for phase_name, phase_config in config.OPTIMIZATION_PHASES.items():
+        for phase_name, phase_config in optimization_phases.items():
             f.write(f"# {phase_config['name']}\n")
             for param in phase_config['parameters']:
                 if param in parameters:

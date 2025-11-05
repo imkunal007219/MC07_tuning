@@ -531,3 +531,217 @@ def calculate_phase_margin(Kp: float, Ki: float, Kd: float,
     phase_margin = 180 + phase_L
 
     return phase_margin
+
+
+def generate_narrow_bounds(drone_params: Dict,
+                          tolerance: float = 0.3,
+                          apply_stability_rules: bool = True) -> Dict[str, Dict[str, Tuple[float, float]]]:
+    """
+    Generate narrow parameter bounds based on physics calculations
+
+    Creates tighter bounds centered on physics-based expected values,
+    reducing search space while maintaining stability margins.
+
+    Args:
+        drone_params: Dictionary of drone physical parameters
+        tolerance: Fractional tolerance around expected value (0.3 = ±30%)
+        apply_stability_rules: Whether to enforce additional stability constraints
+
+    Returns:
+        Dictionary organized by phase with narrow bounds for each parameter
+    """
+    logger.info("\n" + "="*80)
+    logger.info("GENERATING NARROW BOUNDS FROM PHYSICS")
+    logger.info("="*80)
+    logger.info(f"Tolerance: ±{tolerance*100:.0f}% around physics-based values")
+
+    # Generate physics-based initial parameters
+    seeder = PhysicsBasedSeeder(drone_params)
+    expected_params = seeder.generate_initial_parameters()
+
+    narrow_bounds = {}
+
+    # ===== PHASE 1: RATE CONTROLLERS =====
+    phase1_bounds = {}
+
+    # Roll/Pitch rate P gains
+    P_expected = expected_params['ATC_RAT_RLL_P']
+    phase1_bounds['ATC_RAT_RLL_P'] = (
+        P_expected * (1 - tolerance),
+        P_expected * (1 + tolerance)
+    )
+    phase1_bounds['ATC_RAT_PIT_P'] = (
+        P_expected * (1 - tolerance),
+        P_expected * (1 + tolerance)
+    )
+
+    # Roll/Pitch rate I gains (constrained to 0.5-2.0 × P gain)
+    I_expected = expected_params['ATC_RAT_RLL_I']
+    if apply_stability_rules:
+        I_min = max(I_expected * (1 - tolerance), P_expected * 0.5 * (1 - tolerance))
+        I_max = min(I_expected * (1 + tolerance), P_expected * 2.0 * (1 + tolerance))
+    else:
+        I_min = I_expected * (1 - tolerance)
+        I_max = I_expected * (1 + tolerance)
+    phase1_bounds['ATC_RAT_RLL_I'] = (I_min, I_max)
+    phase1_bounds['ATC_RAT_PIT_I'] = (I_min, I_max)
+
+    # Roll/Pitch rate D gains (constrained to < P gain / 10 for stability)
+    D_expected = expected_params['ATC_RAT_RLL_D']
+    if apply_stability_rules:
+        D_max = min(D_expected * (1 + tolerance), P_expected / 10.0)
+        D_min = D_expected * (1 - tolerance)
+    else:
+        D_min = D_expected * (1 - tolerance)
+        D_max = D_expected * (1 + tolerance)
+    phase1_bounds['ATC_RAT_RLL_D'] = (D_min, D_max)
+    phase1_bounds['ATC_RAT_PIT_D'] = (D_min, D_max)
+
+    # Yaw rate gains (typically 0.7x roll/pitch)
+    yaw_P_expected = expected_params['ATC_RAT_YAW_P']
+    phase1_bounds['ATC_RAT_YAW_P'] = (
+        yaw_P_expected * (1 - tolerance),
+        yaw_P_expected * (1 + tolerance)
+    )
+    yaw_I_expected = expected_params['ATC_RAT_YAW_I']
+    phase1_bounds['ATC_RAT_YAW_I'] = (
+        yaw_I_expected * (1 - tolerance),
+        yaw_I_expected * (1 + tolerance)
+    )
+
+    # Filters - must respect hierarchy: gyro_filter > d_filter > error_filter
+    gyro_filter = expected_params['INS_GYRO_FILTER']
+    phase1_bounds['INS_GYRO_FILTER'] = (
+        gyro_filter * (1 - tolerance * 0.5),  # Tighter tolerance on gyro filter
+        gyro_filter * (1 + tolerance * 0.5)
+    )
+
+    # D-term filter (must be < 0.5 × gyro filter)
+    d_filter = expected_params['ATC_RAT_RLL_FLTD']
+    if apply_stability_rules:
+        d_filter_max = min(d_filter * (1 + tolerance), gyro_filter * 0.5)
+    else:
+        d_filter_max = d_filter * (1 + tolerance)
+    phase1_bounds['ATC_RAT_RLL_FLTD'] = (d_filter * (1 - tolerance), d_filter_max)
+    phase1_bounds['ATC_RAT_PIT_FLTD'] = (d_filter * (1 - tolerance), d_filter_max)
+
+    # Error filter (typically lower than D filter)
+    e_filter = expected_params['ATC_RAT_RLL_FLTE']
+    if apply_stability_rules:
+        e_filter_max = min(e_filter * (1 + tolerance), d_filter * 0.8)
+    else:
+        e_filter_max = e_filter * (1 + tolerance)
+    phase1_bounds['ATC_RAT_RLL_FLTE'] = (0.0, e_filter_max)  # Can be 0
+    phase1_bounds['ATC_RAT_PIT_FLTE'] = (0.0, e_filter_max)
+    phase1_bounds['ATC_RAT_YAW_FLTE'] = (0.0, e_filter_max)
+
+    # Target filter (similar to D filter)
+    t_filter = expected_params['ATC_RAT_RLL_FLTT']
+    phase1_bounds['ATC_RAT_RLL_FLTT'] = (t_filter * (1 - tolerance), t_filter * (1 + tolerance))
+    phase1_bounds['ATC_RAT_PIT_FLTT'] = (t_filter * (1 - tolerance), t_filter * (1 + tolerance))
+    phase1_bounds['ATC_RAT_YAW_FLTT'] = (t_filter * (1 - tolerance), t_filter * (1 + tolerance))
+
+    narrow_bounds['phase1_rate'] = phase1_bounds
+
+    # ===== PHASE 2: ATTITUDE CONTROLLERS =====
+    phase2_bounds = {}
+
+    ang_p_expected = expected_params['ATC_ANG_RLL_P']
+    phase2_bounds['ATC_ANG_RLL_P'] = (
+        ang_p_expected * (1 - tolerance),
+        ang_p_expected * (1 + tolerance)
+    )
+    phase2_bounds['ATC_ANG_PIT_P'] = (
+        ang_p_expected * (1 - tolerance),
+        ang_p_expected * (1 + tolerance)
+    )
+    yaw_ang_p = expected_params['ATC_ANG_YAW_P']
+    phase2_bounds['ATC_ANG_YAW_P'] = (
+        yaw_ang_p * (1 - tolerance),
+        yaw_ang_p * (1 + tolerance)
+    )
+
+    # Acceleration limits
+    accel_r = expected_params['ATC_ACCEL_R_MAX']
+    phase2_bounds['ATC_ACCEL_R_MAX'] = (
+        accel_r * (1 - tolerance * 0.5),  # Tighter tolerance
+        accel_r * (1 + tolerance * 0.5)
+    )
+    phase2_bounds['ATC_ACCEL_P_MAX'] = (
+        accel_r * (1 - tolerance * 0.5),
+        accel_r * (1 + tolerance * 0.5)
+    )
+    accel_y = expected_params['ATC_ACCEL_Y_MAX']
+    phase2_bounds['ATC_ACCEL_Y_MAX'] = (
+        accel_y * (1 - tolerance * 0.5),
+        accel_y * (1 + tolerance * 0.5)
+    )
+    slew_yaw = expected_params['ATC_SLEW_YAW']
+    phase2_bounds['ATC_SLEW_YAW'] = (
+        slew_yaw * (1 - tolerance),
+        slew_yaw * (1 + tolerance)
+    )
+
+    narrow_bounds['phase2_attitude'] = phase2_bounds
+
+    # ===== PHASE 3: POSITION CONTROLLERS =====
+    phase3_bounds = {}
+
+    for param_name in ['PSC_POSXY_P', 'PSC_VELXY_P', 'PSC_VELXY_I', 'PSC_VELXY_D',
+                       'PSC_POSZ_P', 'PSC_VELZ_P', 'PSC_ACCZ_P', 'PSC_ACCZ_I', 'PSC_ACCZ_D']:
+        expected = expected_params[param_name]
+        phase3_bounds[param_name] = (
+            expected * (1 - tolerance),
+            expected * (1 + tolerance)
+        )
+
+    # Position filters
+    velxy_fltd = expected_params['PSC_VELXY_FLTD']
+    phase3_bounds['PSC_VELXY_FLTD'] = (
+        velxy_fltd * (1 - tolerance),
+        velxy_fltd * (1 + tolerance)
+    )
+    phase3_bounds['PSC_VELXY_FLTE'] = (
+        velxy_fltd * (1 - tolerance),
+        velxy_fltd * (1 + tolerance)
+    )
+    accz_fltd = expected_params['PSC_ACCZ_FLTD']
+    phase3_bounds['PSC_ACCZ_FLTD'] = (
+        accz_fltd * (1 - tolerance),
+        accz_fltd * (1 + tolerance)
+    )
+    phase3_bounds['PSC_ACCZ_FLTE'] = (
+        accz_fltd * (1 - tolerance),
+        accz_fltd * (1 + tolerance)
+    )
+
+    narrow_bounds['phase3_position'] = phase3_bounds
+
+    # ===== PHASE 4: MOTOR PARAMETERS =====
+    phase4_bounds = {}
+
+    for param_name in ['MOT_THST_HOVER', 'MOT_SPIN_MIN', 'MOT_SPIN_MAX',
+                       'MOT_THST_EXPO', 'ATC_INPUT_TC', 'ATC_THR_MIX_MAN']:
+        expected = expected_params[param_name]
+        # Motor params get tighter tolerance (±20%)
+        param_tolerance = tolerance * 0.67  # ~20% if tolerance is 30%
+        phase4_bounds[param_name] = (
+            expected * (1 - param_tolerance),
+            expected * (1 + param_tolerance)
+        )
+
+    narrow_bounds['phase4_advanced'] = phase4_bounds
+
+    # Log summary
+    logger.info("\nNarrow bounds generated:")
+    for phase_name, bounds_dict in narrow_bounds.items():
+        logger.info(f"\n{phase_name}: {len(bounds_dict)} parameters")
+        for param, (min_val, max_val) in sorted(bounds_dict.items())[:3]:  # Show first 3
+            range_pct = ((max_val - min_val) / min_val) * 100 if min_val > 0 else 0
+            logger.info(f"  {param}: [{min_val:.4f}, {max_val:.4f}] (±{range_pct/2:.1f}%)")
+
+    logger.info("\n" + "="*80)
+    logger.info(f"Narrow bounds complete: {sum(len(b) for b in narrow_bounds.values())} parameters")
+    logger.info("="*80 + "\n")
+
+    return narrow_bounds
