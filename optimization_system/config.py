@@ -172,25 +172,34 @@ OPTIMIZATION_PHASES = {
 # ============================================================================
 # FITNESS FUNCTION WEIGHTS
 # ============================================================================
+# Weights for fitness function components (must sum to ~1.0)
+# Frequency-domain weights ensure formal control-theoretic stability
 FITNESS_WEIGHTS = {
-    'stability': 0.30,
-    'response_time': 0.20,
-    'overshoot': 0.15,
-    'steady_state_error': 0.15,
-    'power_efficiency': 0.10,
-    'disturbance_rejection': 0.10,
+    'stability': 0.25,              # Time-domain stability (oscillations, overshoot)
+    'response_time': 0.20,          # Rise and settling time
+    'tracking': 0.15,               # Position and attitude tracking accuracy
+    'phase_margin': 0.15,           # Frequency-domain: formal stability margin (target: 45-60°)
+    'gain_margin': 0.10,            # Frequency-domain: robustness to gain variations (target: >6 dB)
+    'power_efficiency': 0.05,       # Power consumption
+    'smoothness': 0.10,             # Control smoothness (motor saturation)
 }
 
 # ============================================================================
 # PERFORMANCE METRICS THRESHOLDS
 # ============================================================================
 PERFORMANCE_THRESHOLDS = {
+    # Time-domain thresholds
     'max_rise_time': 1.5,          # seconds
     'max_settling_time': 3.0,      # seconds
     'max_overshoot': 20.0,         # percent
     'max_steady_state_error': 2.0, # percent
-    'min_phase_margin': 45.0,      # degrees
     'max_oscillation_amplitude': 5.0,  # degrees
+
+    # Frequency-domain thresholds (formal stability criteria)
+    'min_phase_margin': 45.0,      # degrees (textbook: 30-60° for satisfactory performance)
+    'target_phase_margin': 52.5,   # degrees (optimal: middle of range)
+    'min_gain_margin': 6.0,        # dB (textbook: >6 dB for satisfactory performance)
+    'target_gain_margin': 9.0,     # dB (optimal: healthy margin)
 }
 
 # ============================================================================
