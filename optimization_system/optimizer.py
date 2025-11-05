@@ -368,8 +368,9 @@ class GeneticOptimizer(BaseOptimizer):
         script_dir = os.path.dirname(os.path.abspath(__file__))
         mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
 
-        # Run mission with timeout based on expected duration
-        timeout = max(60.0, duration * 1.5)  # Add 50% buffer
+        # Run mission with timeout: 30s sensor wait + mission duration + 50% buffer
+        # Mission includes: takeoff, 30s loiter, landing
+        timeout = 120.0  # 2 minutes should be enough for simple hover mission
         logger.info(f"Running mission test: {mission_file} (timeout: {timeout}s)")
 
         return run_mission_test(connection, mission_file, timeout)
@@ -539,8 +540,9 @@ class BayesianOptimizer(BaseOptimizer):
         script_dir = os.path.dirname(os.path.abspath(__file__))
         mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
 
-        # Run mission with timeout based on expected duration
-        timeout = max(60.0, duration * 1.5)  # Add 50% buffer
+        # Run mission with timeout: 30s sensor wait + mission duration + 50% buffer
+        # Mission includes: takeoff, 30s loiter, landing
+        timeout = 120.0  # 2 minutes should be enough for simple hover mission
         logger.info(f"Running mission test: {mission_file} (timeout: {timeout}s)")
 
         return run_mission_test(connection, mission_file, timeout)

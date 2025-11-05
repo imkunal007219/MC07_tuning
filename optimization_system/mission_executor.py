@@ -87,9 +87,16 @@ class MissionExecutor:
 
         # Mission complete (or failed)
         if success:
-            logger.info("✓ Mission completed successfully")
+            logger.info("✓✓✓ MISSION COMPLETED SUCCESSFULLY! ✓✓✓")
+            if 'metrics' in telemetry:
+                logger.info(f"Flight duration: {telemetry['metrics']['duration']:.1f}s")
+                logger.info(f"Max altitude: {telemetry['metrics']['max_altitude']:.2f}m")
         else:
-            logger.warning("Mission did not complete successfully")
+            logger.error("✗✗✗ MISSION FAILED ✗✗✗")
+            if 'metrics' in telemetry and telemetry['metrics'].get('crashed', False):
+                logger.error("Reason: Vehicle crashed")
+            else:
+                logger.error("Reason: Mission timeout (vehicle did not land/disarm within timeout)")
 
         return success, telemetry
 

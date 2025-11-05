@@ -41,7 +41,8 @@ class SITLManager:
     _shutdown_requested = False
 
     def __init__(self, num_instances: int = 10, speedup: int = 1,
-                 ardupilot_path: str = None, frame_type: str = "drone-30kg"):
+                 ardupilot_path: str = None, frame_type: str = "drone-30kg",
+                 pre_start: bool = True):
         """
         Initialize SITL Manager
 
@@ -50,6 +51,7 @@ class SITLManager:
             speedup: SITL speedup factor (1 = real-time)
             ardupilot_path: Path to ArduPilot directory
             frame_type: Frame type to use (drone-30kg for our custom frame)
+            pre_start: If True, start all SITL instances immediately in parallel
         """
         self.num_instances = num_instances
         self.speedup = speedup
@@ -99,6 +101,10 @@ class SITLManager:
         # Initialize instances
         self._initialize_instances()
 
+        # Pre-start instances if requested
+        if pre_start:
+            self._pre_start_all_instances()
+
     def _initialize_instances(self):
         """Initialize all SITL instances"""
         logger.info(f"Initializing {self.num_instances} SITL instances...")
@@ -117,6 +123,52 @@ class SITLManager:
             self.instance_queue.put(i)
 
         logger.info(f"Initialized {len(self.instances)} instances")
+
+    def _pre_start_all_instances(self):
+        """Start all SITL instances in parallel for faster initialization"""
+        logger.info(f"Pre-starting all {self.num_instances} SITL instances in parallel...")
+        logger.info("This will take ~40-60 seconds. Please wait...")
+
+        def start_worker(instance_id: int) -> Tuple[int, bool]:
+            """Worker to start a single instance"""
+            try:
+                # Use default parameters for initial start
+                success = self.start_instance(instance_id, {})
+                if success:
+                    logger.info(f"✓ Instance {instance_id} started successfully")
+                    self.warm_instances_ready.add(instance_id)
+                else:
+                    logger.error(f"✗ Instance {instance_id} failed to start")
+                return (instance_id, success)
+            except Exception as e:
+                logger.error(f"✗ Instance {instance_id} failed with exception: {e}")
+                return (instance_id, False)
+
+        # Start all instances in parallel
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        start_time = time.time()
+        successful = 0
+        failed = 0
+
+        with ThreadPoolExecutor(max_workers=self.num_instances) as executor:
+            futures = {
+                executor.submit(start_worker, i): i
+                for i in range(self.num_instances)
+            }
+
+            for future in as_completed(futures):
+                instance_id, success = future.result()
+                if success:
+                    successful += 1
+                else:
+                    failed += 1
+
+        elapsed = time.time() - start_time
+        logger.info(f"Pre-start complete in {elapsed:.1f}s: {successful} successful, {failed} failed")
+
+        if failed > 0:
+            logger.warning(f"⚠ {failed} instances failed to start - optimization will use {successful} instances")
 
     def _find_free_port(self) -> int:
         """
