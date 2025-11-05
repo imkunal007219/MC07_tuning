@@ -18,6 +18,13 @@ from optimizer import GeneticOptimizer, BayesianOptimizer
 from performance_evaluator import PerformanceEvaluator
 from utils import setup_logging, save_results
 
+# Try to import multi-objective optimizer (requires pymoo)
+try:
+    from multi_objective_optimizer import MultiObjectiveOptimizer
+    MULTI_OBJECTIVE_AVAILABLE = True
+except ImportError:
+    MULTI_OBJECTIVE_AVAILABLE = False
+
 # Global SITL manager for signal handler
 sitl_manager_global = None
 
@@ -45,8 +52,8 @@ def main():
                         choices=['phase1_rate', 'phase2_attitude', 'phase3_position', 'phase4_advanced', 'all'],
                         help='Optimization phase to run')
     parser.add_argument('--algorithm', type=str, default='genetic',
-                        choices=['genetic', 'bayesian'],
-                        help='Optimization algorithm')
+                        choices=['genetic', 'bayesian', 'multi-objective'],
+                        help='Optimization algorithm (multi-objective requires pymoo)')
     parser.add_argument('--generations', type=int, default=100,
                         help='Maximum number of generations')
     parser.add_argument('--parallel', type=int, default=10,
@@ -118,12 +125,27 @@ def main():
             use_physics_seeding=True,  # Use control theory to seed population
             enforce_hierarchical_constraints=args.hierarchical_constraints  # Bandwidth separation constraints
         )
-    else:
+    elif args.algorithm == 'bayesian':
         optimizer = BayesianOptimizer(
             sitl_manager=sitl_manager,
             evaluator=performance_evaluator,
             max_iterations=args.generations
         )
+    elif args.algorithm == 'multi-objective':
+        if not MULTI_OBJECTIVE_AVAILABLE:
+            logger.error("Multi-objective optimization requires pymoo library")
+            logger.error("Install with: pip install pymoo")
+            sys.exit(1)
+        optimizer = MultiObjectiveOptimizer(
+            sitl_manager=sitl_manager,
+            evaluator=performance_evaluator,
+            population_size=config.OPTIMIZATION_CONFIG['population_size']
+        )
+        logger.info("Multi-objective optimization selected (NSGA-II)")
+        logger.info("Will generate Pareto front of trade-off solutions")
+    else:
+        logger.error(f"Unknown algorithm: {args.algorithm}")
+        sys.exit(1)
 
     # Determine phases to run
     if args.phase == 'all':

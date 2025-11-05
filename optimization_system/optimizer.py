@@ -123,6 +123,16 @@ class GeneticOptimizer(BaseOptimizer):
         else:
             logger.info("Hierarchical constraints disabled")
 
+        # Adaptive bounds tracking
+        self.use_adaptive_bounds = True
+        self.adaptive_bounds_interval = 10  # Update every N generations
+        self.min_successful_samples = 20   # Minimum samples before adapting
+        self.successful_params = []         # Track successful parameter sets
+        self.failed_params = []             # Track failed parameter sets
+        self.current_bounds = None          # Will be set during optimization
+        self.hard_bounds = None             # Original bounds (hard limits)
+        logger.info(f"Adaptive bounds enabled (update every {self.adaptive_bounds_interval} gen)")
+
     def optimize(self, phase_name: str, parameters: List[str],
                 bounds: Dict[str, Tuple[float, float]],
                 resume_from: Optional[str] = None) -> Tuple[Dict, float, List]:
@@ -133,8 +143,14 @@ class GeneticOptimizer(BaseOptimizer):
         logger.info(f"Population size: {self.population_size}")
         logger.info(f"Max generations: {self.max_iterations}")
 
+        # Initialize adaptive bounds
+        self.current_bounds = copy.deepcopy(bounds)
+        self.hard_bounds = copy.deepcopy(bounds)
+        self.successful_params = []
+        self.failed_params = []
+
         # Setup DEAP
-        self._setup_deap(parameters, bounds)
+        self._setup_deap(parameters, self.current_bounds)
 
         # Initialize or resume population
         if resume_from:
@@ -185,9 +201,17 @@ class GeneticOptimizer(BaseOptimizer):
             fitnesses = self._evaluate_population(pop, parameters, bounds,
                                                  generation=gen+1, phase_name=phase_name)
 
-            # Assign fitness to individuals
+            # Assign fitness to individuals and track for adaptive bounds
             for ind, fit in zip(pop, fitnesses):
                 ind.fitness.values = (fit,)
+
+                # Track successful/failed parameters for adaptive bounds
+                if self.use_adaptive_bounds:
+                    params = self._individual_to_params(ind, parameters, self.current_bounds)
+                    if fit > 0:  # Successful (positive fitness)
+                        self.successful_params.append(params.copy())
+                    else:  # Failed (negative fitness)
+                        self.failed_params.append(params.copy())
 
             # Update hall of fame
             hof.update(pop)
@@ -234,6 +258,14 @@ class GeneticOptimizer(BaseOptimizer):
                 checkpoint_file = f"/tmp/ga_checkpoint_gen{gen+1}.pkl"
                 self._save_checkpoint(checkpoint_file, pop, gen + 1, hof)
                 logger.info(f"Checkpoint saved: {checkpoint_file}")
+
+            # Update adaptive bounds periodically
+            if (self.use_adaptive_bounds and
+                (gen + 1) % self.adaptive_bounds_interval == 0 and
+                len(self.successful_params) >= self.min_successful_samples):
+                self._update_adaptive_bounds(parameters)
+                # Regenerate toolbox with new bounds
+                self._setup_deap(parameters, self.current_bounds)
 
             # Select next generation
             offspring = self.toolbox.select(pop, len(pop))
@@ -441,6 +473,58 @@ class GeneticOptimizer(BaseOptimizer):
         logger.info(f"Running mission test: {mission_file} (timeout: {timeout}s)")
 
         return run_mission_test(connection, mission_file, timeout)
+
+    def _update_adaptive_bounds(self, parameters: List[str]):
+        """
+        Update parameter bounds based on successful parameter statistics
+
+        Uses mean ± 2σ of successful parameters to narrow search space,
+        while respecting hard limits.
+        """
+        logger.info("\n" + "="*60)
+        logger.info("UPDATING ADAPTIVE BOUNDS")
+        logger.info("="*60)
+        logger.info(f"Successful samples: {len(self.successful_params)}")
+        logger.info(f"Failed samples: {len(self.failed_params)}")
+
+        bounds_updated = 0
+
+        for param_name in parameters:
+            # Extract successful values for this parameter
+            successful_values = [p[param_name] for p in self.successful_params]
+
+            if len(successful_values) < self.min_successful_samples:
+                continue
+
+            # Calculate statistics
+            mean_val = np.mean(successful_values)
+            std_val = np.std(successful_values)
+
+            # Get hard bounds
+            hard_min, hard_max = self.hard_bounds[param_name]
+
+            # Calculate new bounds: mean ± 2σ (95% confidence interval)
+            new_min = max(hard_min, mean_val - 2 * std_val)
+            new_max = min(hard_max, mean_val + 2 * std_val)
+
+            # Only update if bounds actually narrow (avoid expansion)
+            current_min, current_max = self.current_bounds[param_name]
+            if new_min > current_min or new_max < current_max:
+                old_range = current_max - current_min
+                new_range = new_max - new_min
+                reduction = (1 - new_range / old_range) * 100 if old_range > 0 else 0
+
+                self.current_bounds[param_name] = (new_min, new_max)
+                bounds_updated += 1
+
+                logger.info(f"  {param_name}:")
+                logger.info(f"    Old: [{current_min:.4f}, {current_max:.4f}] (range: {old_range:.4f})")
+                logger.info(f"    New: [{new_min:.4f}, {new_max:.4f}] (range: {new_range:.4f})")
+                logger.info(f"    Mean ± 2σ: {mean_val:.4f} ± {2*std_val:.4f}")
+                logger.info(f"    Reduction: {reduction:.1f}%")
+
+        logger.info(f"\n✓ Updated {bounds_updated}/{len(parameters)} parameter bounds")
+        logger.info("="*60 + "\n")
 
     def _check_convergence(self) -> bool:
         """Check if optimization has converged"""
