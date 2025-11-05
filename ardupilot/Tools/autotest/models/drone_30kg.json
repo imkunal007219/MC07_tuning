@@ -1,65 +1,154 @@
-# 30kg Heavy-lift Drone Model
-# Generic parameters for 30kg total takeoff weight
-# These parameters will be updated with actual design specifications
+# 30kg Heavy-lift Drone Model - MELARD 1026 Motor with 36x19 Props
+# X-frame quadcopter with 14S battery system
+# Updated with actual specifications from motor/ESC/battery data
 
 {
-    # total vehicle mass (kg)
+    # ============================================================
+    # PHYSICAL PARAMETERS (from measurements)
+    # ============================================================
+
+    # total vehicle mass (kg) - fully assembled with battery
     "mass" : 30.0,
 
-    # vehicle diameter (m) - estimated for medium-large frame
+    # vehicle diagonal size (m) - motor-to-motor distance
     "diagonal_size" : 1.5,
 
-    # Reference parameters from hover/flight testing
-    # These should be calibrated with actual flight data
-    "refSpd" : 15.0,    # m/s - typical cruise speed
-    "refAngle" : 25.0,  # degrees - pitch angle at cruise
-    "refVoltage" : 44.4, # volts - 12S LiPo nominal (3.7V * 12)
-    "refCurrent" : 45.0, # Amps - estimated cruise current
-    "refAlt" : 50,      # meters AMSL - reference altitude
-    "refTempC" : 25,    # degrees C - standard temperature
-    "refBatRes" : 0.02, # battery resistance (ohms)
+    # arm length (m) - center to motor axis
+    "arm_length" : 0.75,
 
-    # full battery voltage (12S LiPo fully charged: 4.2V * 12)
-    "maxVoltage" : 50.4,
+    # frame height (m)
+    "frame_height" : 0.1,
 
-    # full battery capacity in Amp-hours
-    # Estimated for ~20-25 minute flight time with 30kg payload
-    "battCapacityAh" : 30,
+    # ============================================================
+    # INERTIA PARAMETERS (from CAD/measurements)
+    # ============================================================
 
-    # MOT_THST_EXPO - motor thrust exponent
-    "propExpo" : 0.55,
+    # moments of inertia (kg·m²)
+    "Ixx" : 2.78,   # Roll axis inertia
+    "Iyy" : 4.88,   # Pitch axis inertia
+    "Izz" : 7.18,   # Yaw axis inertia
 
-    # approximate maximum yaw rate in deg/sec
-    "refRotRate" : 90,
+    # cross-product inertia terms (kg·m²)
+    "Ixy" : 0.084,
+    "Ixz" : -0.0116,
+    "Iyz" : -0.0130,
 
-    # hover throttle from 0 to 1
-    # Higher for heavy-lift (estimated 50% throttle for hover)
-    "hoverThrOut" : 0.5,
+    # ============================================================
+    # MOTOR & PROPELLER PARAMETERS
+    # ============================================================
 
-    # MOT_PWM_MIN
-    "pwmMin" : 1000,
+    # Motor: MELARD 1026, Kv=100, 14S rated
+    # Propeller: 36×19 inch
+    # Max thrust: 235.4N per motor (24kg)
 
-    # MOT_PWM_MAX
-    "pwmMax" : 2000,
+    "motor_kv" : 100,         # RPM/V
+    "prop_diameter" : 0.9144, # meters (36 inches)
+    "prop_pitch" : 0.4826,    # meters (19 inches)
 
-    # MOT_SPIN_MIN
-    "spin_min" : 0.15,
+    # total effective rotor disc area in sq m (4 motors)
+    "disc_area" : 0.658,
 
-    # MOT_SPIN_MAX
-    "spin_max" : 0.95,
+    # thrust and torque coefficients (from thrust stand data)
+    "thrust_coef" : 0.063,    # C_T
+    "torque_coef" : 0.0052,   # C_Q
 
-    # maximum motor slew rate (percent/sec), or zero to disable
-    "slew_max" : 60,
-
-    # total effective disc area in sq m
-    # Estimated for 4 motors with 20-22 inch props
-    # Area = π * (0.254)^2 * 4 = 0.81 sq m
-    "disc_area" : 0.85,
-
-    # momentum drag coefficient
-    # ratio of momentum drag relative to ducted rotor
-    "mdrag_coef" : 0.12,
+    # MOT_THST_EXPO - motor thrust curve exponent (0=linear, 1=quadratic)
+    "propExpo" : 0.75,
 
     # number of motors (quadcopter X configuration)
-    "num_motors" : 4
+    "num_motors" : 4,
+
+    # ============================================================
+    # BATTERY PARAMETERS (14S LiPo system)
+    # ============================================================
+
+    # full battery voltage (14S LiPo fully charged: 4.2V * 14)
+    "maxVoltage" : 58.8,
+
+    # nominal voltage (14S: 3.7V * 14)
+    "refVoltage" : 51.8,
+
+    # minimum safe voltage (14S: 3.0V * 14)
+    "minVoltage" : 42.0,
+
+    # battery capacity in Amp-hours
+    "battCapacityAh" : 38.5,
+
+    # battery internal resistance (ohms) - estimated for 38Ah 14S
+    "refBatRes" : 0.015,
+
+    # ============================================================
+    # HOVER & REFERENCE PARAMETERS (from performance data)
+    # ============================================================
+
+    # hover throttle from 0 to 1 (30% throttle gives ~80N per motor)
+    "hoverThrOut" : 0.33,
+
+    # Reference parameters from performance table at 30% throttle (hover)
+    "refSpd" : 15.0,      # m/s - typical cruise speed
+    "refAngle" : 25.0,    # degrees - pitch angle at cruise
+    "refCurrent" : 18.23, # Amps - hover current per motor at 30%
+    "refAlt" : 50,        # meters AMSL - reference altitude
+    "refTempC" : 25,      # degrees C - standard temperature
+    "refRotRate" : 90,    # approximate maximum yaw rate in deg/sec
+
+    # ============================================================
+    # ESC PARAMETERS (E150 14S)
+    # ============================================================
+
+    # MOT_PWM_MIN (microseconds)
+    "pwmMin" : 1000,
+
+    # MOT_PWM_MAX (microseconds)
+    "pwmMax" : 2000,
+
+    # MOT_SPIN_MIN (0-1 range)
+    "spin_min" : 0.15,
+
+    # MOT_SPIN_MAX (0-1 range)
+    "spin_max" : 0.95,
+
+    # maximum motor slew rate (deg/sec) - updated for E150 ESC
+    "slew_max" : 150,
+
+    # ESC update rate (Hz) - PWM protocol at 400Hz
+    "esc_rate" : 400,
+
+    # ============================================================
+    # AERODYNAMIC PARAMETERS (from measurements/CFD)
+    # ============================================================
+
+    # momentum drag coefficient (ratio relative to ducted rotor)
+    "mdrag_coef" : 0.2,
+
+    # drag coefficient (body)
+    "drag_coef" : 0.7,
+
+    # frontal area (m²)
+    "frontal_area" : 0.124892,
+
+    # side area (m²)
+    "side_area" : 0.354020,
+
+    # vertical drag coefficient (estimated)
+    "vertical_drag_coef" : 1.0,
+
+    # rotor downwash velocity in hover (m/s)
+    "downwash_velocity" : 7.0,
+
+    # ground effect height (m) - rotor diameter
+    "ground_effect_height" : 0.914,
+
+    # ground effect factor (thrust increase near ground)
+    "ground_effect_factor" : 1.08,
+
+    # ============================================================
+    # MOTOR RESISTANCE (estimated for power modeling)
+    # ============================================================
+
+    # motor phase resistance (ohms) - estimated for 100Kv motor
+    "motor_resistance" : 0.05,
+
+    # motor inductance (mH) - estimated
+    "motor_inductance" : 0.03
 }

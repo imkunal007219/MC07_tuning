@@ -1,18 +1,25 @@
 # Parameter file for 30kg Heavy-lift Drone
+# Motor: MELARD 1026 (Kv=100), Props: 36×19 inch, ESC: E150 14S, Battery: 14S 38.5Ah
 # Quadcopter X configuration (4 motors)
-# Generic parameters - to be updated with actual design values
+# Updated with actual specifications from motor/ESC/battery data
 
-# Frame configuration
+# ============================================================
+# FRAME CONFIGURATION
+# ============================================================
 FRAME_CLASS     1    # Quad
 FRAME_TYPE      1    # X configuration
 
-# Failsafe settings
-FS_THR_ENABLE   1
+# ============================================================
+# SAFETY & FAILSAFE SETTINGS
+# ============================================================
+FS_THR_ENABLE   1    # Enable throttle failsafe
+FENCE_ENABLE    1    # Enable geofence
+FENCE_RADIUS    200  # 200m radius safety boundary
+FENCE_ALT_MAX   120  # 120m altitude limit
 
-# Fence settings (safety boundary)
-FENCE_RADIUS    200
-
-# RC input ranges
+# ============================================================
+# RC INPUT RANGES
+# ============================================================
 RC1_MAX         2000.000000
 RC1_MIN         1000.000000
 RC1_TRIM        1500.000000
@@ -39,7 +46,9 @@ RC8_MAX         2000.000000
 RC8_MIN         1000.000000
 RC8_TRIM        1500.000000
 
-# Flight modes
+# ============================================================
+# FLIGHT MODES
+# ============================================================
 FLTMODE1        7    # Circle
 FLTMODE2        9    # Land
 FLTMODE3        6    # RTL
@@ -47,44 +56,142 @@ FLTMODE4        3    # Auto
 FLTMODE5        5    # Loiter
 FLTMODE6        0    # Stabilize
 
-# Motor parameters for heavy-lift configuration
-MOT_THST_EXPO   0.55    # Thrust curve expo
-MOT_THST_HOVER  0.5     # Estimated hover throttle (50% for 30kg)
-MOT_BAT_VOLT_MIN 36.0   # 12S LiPo minimum (3.0V * 12)
-MOT_BAT_VOLT_MAX 50.4   # 12S LiPo maximum (4.2V * 12)
+# ============================================================
+# MOTOR PARAMETERS (MELARD 1026 with 36×19 props)
+# ============================================================
+# Thrust curve expo (0=linear, 1=quadratic)
+MOT_THST_EXPO   0.75
+
+# Hover throttle (30-33% from performance data)
+MOT_THST_HOVER  0.33
+
+# 14S LiPo voltage range
+MOT_BAT_VOLT_MIN 42.0   # 14S minimum (3.0V * 14)
+MOT_BAT_VOLT_MAX 58.8   # 14S maximum (4.2V * 14)
+
+# PWM range for E150 ESC
 MOT_PWM_MIN     1000
 MOT_PWM_MAX     2000
+MOT_PWM_TYPE    0       # PWM protocol (not DShot)
+
+# Motor spin parameters
 MOT_SPIN_MIN    0.15
 MOT_SPIN_MAX    0.95
-MOT_SPOOL_TIME  0.5     # Spool-up time for larger motors
+MOT_SPIN_ARM    0.10
 
-# Battery monitoring
-BATT_MONITOR    4
-BATT_CAPACITY   30000   # 30Ah battery capacity in mAh
+# Spool-up time for larger motors (seconds)
+MOT_SPOOL_TIME  0.5
 
-# Rate controller tuning (conservative for heavy payload)
-ATC_RAT_RLL_P   0.10
-ATC_RAT_RLL_I   0.08
-ATC_RAT_RLL_D   0.004
+# Motor slew rate limit (deg/s) - E150 ESC capability
+MOT_SLEW_UP_TIME  0.0   # Disable (handled by slew_max in JSON)
+MOT_SLEW_DN_TIME  0.0   # Disable
+
+# ============================================================
+# BATTERY MONITORING (14S 38.5Ah LiPo)
+# ============================================================
+BATT_MONITOR    4       # Analog voltage and current
+BATT_CAPACITY   38500   # 38.5Ah battery capacity in mAh
+BATT_VOLT_PIN   2       # Voltage sensing pin
+BATT_CURR_PIN   3       # Current sensing pin
+
+# Battery voltage thresholds
+BATT_LOW_VOLT   44.8    # Low voltage warning (3.2V * 14)
+BATT_CRT_VOLT   42.0    # Critical voltage (3.0V * 14)
+BATT_FS_LOW_ACT 2       # Return to launch on low voltage
+BATT_FS_CRT_ACT 1       # Land immediately on critical voltage
+
+# ============================================================
+# ESC PARAMETERS (E150 14S)
+# ============================================================
+# ESC update rate (Hz) - PWM protocol at 400Hz
+SERVO_RATE      400
+
+# ============================================================
+# RATE CONTROLLER TUNING (Conservative baseline)
+# ============================================================
+# Roll rate controller - adjusted for I_xx = 2.78 kg·m²
+ATC_RAT_RLL_P   0.12
+ATC_RAT_RLL_I   0.10
+ATC_RAT_RLL_D   0.005
+ATC_RAT_RLL_FLTD 20.0   # D-term filter (Hz)
+ATC_RAT_RLL_FLTE 0.0    # Error filter (0=disabled)
+ATC_RAT_RLL_FLTT 20.0   # Target filter (Hz)
+
+# Pitch rate controller - adjusted for I_yy = 4.88 kg·m²
 ATC_RAT_PIT_P   0.10
 ATC_RAT_PIT_I   0.08
 ATC_RAT_PIT_D   0.004
-ATC_RAT_YAW_P   0.25
+ATC_RAT_PIT_FLTD 20.0
+ATC_RAT_PIT_FLTE 0.0
+ATC_RAT_PIT_FLTT 20.0
+
+# Yaw rate controller - adjusted for I_zz = 7.18 kg·m²
+ATC_RAT_YAW_P   0.20
 ATC_RAT_YAW_I   0.02
+ATC_RAT_YAW_D   0.000
+ATC_RAT_YAW_FLTD 5.0
+ATC_RAT_YAW_FLTE 2.0
+ATC_RAT_YAW_FLTT 20.0
 
-# Position controller
-PSC_VELXY_P     0.8
-PSC_VELXY_I     0.4
-PSC_VELXY_D     0.15
+# Rate controller limits
+ATC_RATE_FF_ENAB 1      # Enable feed-forward
+ATC_ACCEL_R_MAX  110000 # Roll acceleration limit (deg/s²)
+ATC_ACCEL_P_MAX  110000 # Pitch acceleration limit (deg/s²)
+ATC_ACCEL_Y_MAX  27000  # Yaw acceleration limit (deg/s²)
 
-# Altitude controller
-PSC_ACCZ_P      0.20
-PSC_ACCZ_I      0.40
+# ============================================================
+# ATTITUDE CONTROLLER (Angle control)
+# ============================================================
+ATC_ANG_RLL_P   4.5     # Roll angle P gain
+ATC_ANG_PIT_P   4.5     # Pitch angle P gain
+ATC_ANG_YAW_P   4.5     # Yaw angle P gain
 
-# Compass offsets (will be calibrated)
-COMPASS_OFS_X   5
-COMPASS_OFS_Y   13
-COMPASS_OFS_Z   -18
+# Angle limits
+ATC_SLEW_YAW    6000    # Yaw target slew rate (deg/s)
+ATC_ANG_LIM_TC  1.0     # Angle limit time constant
+
+# ============================================================
+# POSITION CONTROLLER
+# ============================================================
+# Velocity controller (horizontal)
+PSC_VELXY_P     0.9
+PSC_VELXY_I     0.45
+PSC_VELXY_D     0.18
+PSC_VELXY_FLTE  5.0     # Velocity error filter (Hz)
+PSC_VELXY_FLTD  5.0     # Velocity D-term filter (Hz)
+
+# Position controller (horizontal)
+PSC_POSXY_P     1.0
+
+# Velocity limits
+PSC_VELXY_MAX   1000    # Max horizontal velocity (cm/s)
+
+# ============================================================
+# ALTITUDE CONTROLLER
+# ============================================================
+# Vertical acceleration controller
+PSC_ACCZ_P      0.25
+PSC_ACCZ_I      0.50
+PSC_ACCZ_D      0.00
+PSC_ACCZ_FLTD   20.0
+
+# Vertical velocity controller
+PSC_VELZ_P      5.0
+PSC_VELZ_FLTE   5.0
+
+# Vertical position controller
+PSC_POSZ_P      1.0
+
+# ============================================================
+# INS / SENSOR CONFIGURATION
+# ============================================================
+# Gyro filter - conservative for 30kg drone
+INS_GYRO_FILTER 80      # Gyro low-pass filter (Hz)
+INS_ACCEL_FILTER 20     # Accelerometer filter (Hz)
+
+# Notch filters (will be tuned based on vibration analysis)
+INS_NOTCH_ENABLE 0      # Disabled initially
+INS_HNTCH_ENABLE 0      # Harmonic notch disabled initially
 
 # INS calibration - small offsets so INS is recognized as calibrated
 INS_ACCOFFS_X   0.001
@@ -100,8 +207,32 @@ INS_ACC2SCAL_X  1.001
 INS_ACC2SCAL_Y  1.001
 INS_ACC2SCAL_Z  1.001
 
+# ============================================================
+# COMPASS CONFIGURATION
+# ============================================================
+# Compass offsets (will be calibrated in flight)
+COMPASS_OFS_X   5
+COMPASS_OFS_Y   13
+COMPASS_OFS_Z   -18
+
+# ============================================================
+# SIMULATION PARAMETERS
+# ============================================================
 # Disable simulated sensor noise for testing
 SIM_BARO_RND    0
+SIM_GPS_NOISE   0
+SIM_GPS_GLITCH_X 0
+SIM_GPS_GLITCH_Y 0
+SIM_GPS_GLITCH_Z 0
 
-# Landing detection
+# ============================================================
+# LANDING DETECTION
+# ============================================================
 LAND_SPEED      50      # cm/s - slower landing for heavy drone
+LAND_SPEED_HIGH 100     # cm/s - high descent speed
+
+# ============================================================
+# LOG PARAMETERS
+# ============================================================
+LOG_BITMASK     176126  # Enable comprehensive logging
+LOG_DISARMED    1       # Log while disarmed
