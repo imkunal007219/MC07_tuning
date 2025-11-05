@@ -631,11 +631,11 @@ class SITLManager:
         try:
             from bin_log_analyzer import BinLogAnalyzer
 
-            # Find latest .bin log in temp directory
-            bin_file = BinLogAnalyzer.find_latest_bin_log(temp_dir)
+            # Find latest .bin log in ArduPilot logs directory
+            bin_file = BinLogAnalyzer.find_latest_bin_log(self.ardupilot_path, instance_id)
 
             if not bin_file:
-                logger.warning(f"No .bin log found for instance {instance_id} in {temp_dir}")
+                logger.warning(f"No .bin log found for instance {instance_id}")
                 telemetry['bin_log_params'] = {}
                 telemetry['param_verification'] = {
                     'all_match': False,
@@ -643,8 +643,8 @@ class SITLManager:
                 }
                 return
 
-            # Extract parameters from .bin log
-            actual_params = BinLogAnalyzer.extract_parameters(bin_file)
+            # Extract parameters from .bin log using CSV method (preferred)
+            actual_params = BinLogAnalyzer.extract_parameters_csv(bin_file)
 
             if not actual_params:
                 logger.warning(f"Could not extract parameters from {bin_file}")
