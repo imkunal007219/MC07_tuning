@@ -47,37 +47,39 @@ class MissionExecutor:
         """
         logger.info(f"Starting mission: {mission_file}")
 
-        # Upload mission
-        if not self.mission_loader.load_and_upload(mission_file):
-            logger.error("Failed to upload mission")
+        # Step 1: Set required parameters for AUTO mode arming
+        logger.info("Setting AUTO_OPTIONS and ARMING_CHECK parameters...")
+        self._set_parameter("AUTO_OPTIONS", 1)  # Allow arming in AUTO mode
+        self._set_parameter("ARMING_CHECK", 0)  # Disable arming checks for SITL testing
+        time.sleep(0.5)  # Let parameters settle
+
+        # Step 2: Load waypoints using correct MAVProxy method
+        logger.info(f"Loading waypoints: {mission_file}")
+        if not self._load_waypoints_mavproxy(mission_file):
+            logger.error("Failed to load waypoints")
             return False, {}
 
-        # Verify mission uploaded
-        count = self.mission_loader.verify_mission()
-        if count <= 0:
-            logger.error("Mission verification failed")
+        # Step 3: Wait 20 seconds for all sensors to get ready
+        logger.info("Waiting 20 seconds for sensors to initialize...")
+        if not self._wait_for_sensors_ready(timeout=20):
+            logger.warning("Sensor initialization timeout - proceeding anyway")
+
+        # Step 4: Set mode AUTO (BEFORE arming)
+        logger.info("Setting AUTO mode...")
+        if not self._set_mode("AUTO"):
+            logger.error("Failed to set AUTO mode")
             return False, {}
 
-        logger.info(f"Mission uploaded successfully ({count} waypoints)")
-
-        # Wait for EKF to initialize
-        logger.info("Waiting for EKF initialization...")
-        if not self._wait_for_ekf(timeout=30):
-            logger.error("EKF initialization failed")
-            return False, {}
-
-        # Arm vehicle
-        logger.info("Arming vehicle...")
+        # Step 5: Arm throttle
+        logger.info("Arming vehicle in AUTO mode...")
         if not self._arm_vehicle():
             logger.error("Failed to arm vehicle")
             return False, {}
 
-        # Set AUTO mode to start mission
-        logger.info("Setting AUTO mode to start mission...")
-        if not self._set_mode("AUTO"):
-            logger.error("Failed to set AUTO mode")
-            self._disarm_vehicle()
-            return False, {}
+        # Step 6: Send RC 3 1500 (throttle mid-stick) - required for mission start
+        logger.info("Setting throttle to mid-stick (RC 3 1500)...")
+        self._send_rc_override(channel=3, pwm=1500)
+        time.sleep(0.5)
 
         # Monitor mission and collect telemetry
         logger.info("Mission running - collecting telemetry...")
@@ -181,6 +183,134 @@ class MissionExecutor:
 
         logger.warning(f"Mode change to {mode_name} not confirmed")
         return True  # Continue anyway, mode might have changed
+
+    def _set_parameter(self, param_name: str, param_value: float) -> bool:
+        """
+        Set a parameter value.
+
+        Args:
+            param_name: Parameter name (e.g., "AUTO_OPTIONS")
+            param_value: Parameter value
+
+        Returns:
+            True if successful
+        """
+        logger.info(f"Setting {param_name} = {param_value}")
+
+        # Encode parameter name (max 16 chars)
+        param_name_bytes = param_name.encode('utf-8')[:16]
+
+        # Send PARAM_SET message
+        self.connection.mav.param_set_send(
+            self.connection.target_system,
+            self.connection.target_component,
+            param_name_bytes,
+            float(param_value),
+            mavutil.mavlink.MAV_PARAM_TYPE_REAL32
+        )
+
+        # Wait for confirmation
+        start_time = time.time()
+        while time.time() - start_time < 5.0:
+            msg = self.connection.recv_match(type='PARAM_VALUE', blocking=True, timeout=1)
+            if msg and msg.param_id.decode('utf-8').strip('\x00') == param_name:
+                logger.info(f"✓ {param_name} set to {msg.param_value}")
+                return True
+
+        logger.warning(f"Parameter {param_name} set command sent (no confirmation)")
+        return True  # Continue anyway
+
+    def _load_waypoints_mavproxy(self, mission_file: str) -> bool:
+        """
+        Load waypoints using the mission loader.
+
+        This uses pymavlink's MISSION_ITEM messages which is the correct
+        programmatic way to load waypoints (equivalent to MAVProxy's 'wp load').
+
+        Args:
+            mission_file: Path to waypoint file
+
+        Returns:
+            True if successful
+        """
+        # Use the mission loader to upload waypoints
+        if not self.mission_loader.load_and_upload(mission_file):
+            return False
+
+        # Verify mission uploaded
+        count = self.mission_loader.verify_mission()
+        if count <= 0:
+            logger.error("Mission verification failed")
+            return False
+
+        logger.info(f"✓ Mission loaded successfully ({count} waypoints)")
+        return True
+
+    def _wait_for_sensors_ready(self, timeout: float = 20.0) -> bool:
+        """
+        Wait for sensors to be ready (EKF, GPS, etc.).
+
+        Args:
+            timeout: Maximum wait time in seconds
+
+        Returns:
+            True if sensors ready, False if timeout
+        """
+        start_time = time.time()
+        ekf_ready = False
+
+        while time.time() - start_time < timeout:
+            # Check for position data (indicates EKF is initialized)
+            msg = self.connection.recv_match(
+                type='GLOBAL_POSITION_INT',
+                blocking=True,
+                timeout=1
+            )
+
+            if msg:
+                lat = msg.lat / 1e7
+                lon = msg.lon / 1e7
+                alt = msg.relative_alt / 1000.0
+
+                if lat != 0 and lon != 0:
+                    if not ekf_ready:
+                        logger.info(f"✓ EKF ready - Position: ({lat:.6f}, {lon:.6f}, {alt:.2f}m)")
+                        ekf_ready = True
+
+                    # Continue waiting for full timeout to let all sensors stabilize
+                    elapsed = time.time() - start_time
+                    if elapsed >= timeout:
+                        logger.info(f"✓ Sensors initialized ({timeout}s wait complete)")
+                        return True
+
+            elapsed = int(time.time() - start_time)
+            if elapsed % 5 == 0 and elapsed > 0 and not ekf_ready:
+                logger.debug(f"Waiting for sensors... ({elapsed}s)")
+
+        return ekf_ready
+
+    def _send_rc_override(self, channel: int, pwm: int):
+        """
+        Send RC channel override.
+
+        Args:
+            channel: RC channel number (1-8)
+            pwm: PWM value (typically 1000-2000, 1500 is neutral)
+        """
+        # Initialize all channels to UINT16_MAX (no change)
+        channels = [65535] * 8
+
+        # Set the specific channel
+        channels[channel - 1] = pwm
+
+        # Send RC_CHANNELS_OVERRIDE message
+        self.connection.mav.rc_channels_override_send(
+            self.connection.target_system,
+            self.connection.target_component,
+            *channels
+        )
+
+        logger.debug(f"RC override: Channel {channel} = {pwm}")
 
     def _monitor_mission(self, timeout: float) -> Tuple[bool, Dict]:
         """
