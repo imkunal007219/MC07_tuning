@@ -13,6 +13,11 @@ from scipy.fft import fft, fftfreq
 from scipy.signal import welch
 import math
 
+from frequency_domain_analysis import (
+    analyze_telemetry_frequency_domain,
+    calculate_frequency_domain_fitness
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,12 @@ class PerformanceMetrics:
     max_rate: float = 0.0
     max_altitude_error: float = 0.0
 
+    # Frequency-domain metrics
+    phase_margin_deg: float = 0.0
+    gain_margin_db: float = 0.0
+    phase_margin_score: float = 0.0
+    gain_margin_score: float = 0.0
+
     # Overall
     crashed: bool = False
     fitness: float = 0.0
@@ -63,13 +74,15 @@ class PerformanceEvaluator:
         Args:
             weights: Dictionary of weights for fitness function components
         """
-        # Default fitness weights
+        # Default fitness weights (must sum to ~1.0)
         self.weights = weights or {
-            'stability': 0.30,
-            'response_time': 0.25,
-            'tracking': 0.20,
-            'power_efficiency': 0.10,
-            'smoothness': 0.15
+            'stability': 0.25,
+            'response_time': 0.20,
+            'tracking': 0.15,
+            'phase_margin': 0.15,      # Frequency-domain: formal stability
+            'gain_margin': 0.10,        # Frequency-domain: robustness
+            'power_efficiency': 0.05,
+            'smoothness': 0.10
         }
 
         # Safety constraints
@@ -174,6 +187,29 @@ class PerformanceEvaluator:
                 metrics.max_altitude_error = np.max(
                     np.abs(telemetry['altitude'] - telemetry['altitude_target'])
                 )
+
+            # Frequency-domain analysis
+            try:
+                freq_results = analyze_telemetry_frequency_domain(telemetry)
+                if 'overall' in freq_results:
+                    metrics.phase_margin_deg = freq_results['overall'].get('phase_margin_deg', 0.0)
+                    metrics.gain_margin_db = freq_results['overall'].get('gain_margin_db', 0.0)
+
+                    # Calculate normalized fitness scores
+                    freq_fitness = calculate_frequency_domain_fitness({
+                        'phase_margin_deg': metrics.phase_margin_deg,
+                        'gain_margin_db': metrics.gain_margin_db
+                    })
+                    metrics.phase_margin_score = freq_fitness['phase_margin_score']
+                    metrics.gain_margin_score = freq_fitness['gain_margin_score']
+
+                    logger.debug(f"Frequency domain: PM={metrics.phase_margin_deg:.1f}°, "
+                               f"GM={metrics.gain_margin_db:.1f}dB")
+            except Exception as e:
+                logger.debug(f"Frequency domain analysis failed: {e}")
+                # Use neutral scores if analysis fails
+                metrics.phase_margin_score = 0.5
+                metrics.gain_margin_score = 0.5
 
             # Check safety violations
             if not self._check_safety_constraints(metrics):
@@ -529,6 +565,10 @@ class PerformanceEvaluator:
         # Tracking score (inverse of RMSE)
         tracking_score = 100.0 / (1.0 + metrics.position_rmse + metrics.attitude_rmse)
 
+        # Frequency-domain scores (normalized 0-1 scale, convert to 0-100)
+        phase_margin_score = metrics.phase_margin_score * 100.0
+        gain_margin_score = metrics.gain_margin_score * 100.0
+
         # Power efficiency score
         power_score = min(100.0, metrics.power_efficiency * 10.0)
 
@@ -540,6 +580,8 @@ class PerformanceEvaluator:
             self.weights['stability'] * stability_score +
             self.weights['response_time'] * response_score +
             self.weights['tracking'] * tracking_score +
+            self.weights['phase_margin'] * phase_margin_score +
+            self.weights['gain_margin'] * gain_margin_score +
             self.weights['power_efficiency'] * power_score +
             self.weights['smoothness'] * smoothness_score
         )

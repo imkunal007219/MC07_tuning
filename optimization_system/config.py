@@ -172,25 +172,34 @@ OPTIMIZATION_PHASES = {
 # ============================================================================
 # FITNESS FUNCTION WEIGHTS
 # ============================================================================
+# Weights for fitness function components (must sum to ~1.0)
+# Frequency-domain weights ensure formal control-theoretic stability
 FITNESS_WEIGHTS = {
-    'stability': 0.30,
-    'response_time': 0.20,
-    'overshoot': 0.15,
-    'steady_state_error': 0.15,
-    'power_efficiency': 0.10,
-    'disturbance_rejection': 0.10,
+    'stability': 0.25,              # Time-domain stability (oscillations, overshoot)
+    'response_time': 0.20,          # Rise and settling time
+    'tracking': 0.15,               # Position and attitude tracking accuracy
+    'phase_margin': 0.15,           # Frequency-domain: formal stability margin (target: 45-60°)
+    'gain_margin': 0.10,            # Frequency-domain: robustness to gain variations (target: >6 dB)
+    'power_efficiency': 0.05,       # Power consumption
+    'smoothness': 0.10,             # Control smoothness (motor saturation)
 }
 
 # ============================================================================
 # PERFORMANCE METRICS THRESHOLDS
 # ============================================================================
 PERFORMANCE_THRESHOLDS = {
+    # Time-domain thresholds
     'max_rise_time': 1.5,          # seconds
     'max_settling_time': 3.0,      # seconds
     'max_overshoot': 20.0,         # percent
     'max_steady_state_error': 2.0, # percent
-    'min_phase_margin': 45.0,      # degrees
     'max_oscillation_amplitude': 5.0,  # degrees
+
+    # Frequency-domain thresholds (formal stability criteria)
+    'min_phase_margin': 45.0,      # degrees (textbook: 30-60° for satisfactory performance)
+    'target_phase_margin': 52.5,   # degrees (optimal: middle of range)
+    'min_gain_margin': 6.0,        # dB (textbook: >6 dB for satisfactory performance)
+    'target_gain_margin': 9.0,     # dB (optimal: healthy margin)
 }
 
 # ============================================================================
@@ -294,3 +303,96 @@ CONVERGENCE_CONFIG = {
     'stagnation_generations': 10,            # Stop if no improvement
     'target_fitness': 0.95,                  # Stop if reached
 }
+
+# ============================================================================
+# EARLY CRASH DETECTION CONFIGURATION
+# ============================================================================
+EARLY_CRASH_DETECTION_CONFIG = {
+    'enabled': True,
+    'check_interval': 0.5,          # seconds
+    'min_samples': 50,               # minimum data points before checking
+    'sensitivity': 'medium',         # 'low', 'medium', 'high'
+    'expected_time_savings': 0.75,   # 75% reduction in crash time (2 min → 30 sec)
+}
+
+# ============================================================================
+# INTELLIGENT TEST SEQUENCING CONFIGURATION
+# ============================================================================
+INTELLIGENT_TEST_SEQUENCING_CONFIG = {
+    'enabled': True,
+    'min_pass_score': 60.0,          # minimum score to pass a stage (0-100)
+    'enable_optional_tests': True,    # run optional tests (frequency, trajectory)
+    'early_termination': True,        # stop testing if fundamentals fail
+    'expected_time_savings': 0.40,    # 40% reduction in evaluation time
+}
+
+# ============================================================================
+# BOUNDS MODE CONFIGURATION
+# ============================================================================
+# The bounds in OPTIMIZATION_PHASES above are WIDE bounds for comprehensive search
+# Narrow bounds can be generated dynamically based on physics calculations
+
+BOUNDS_MODE_CONFIG = {
+    'wide': {
+        'description': 'Wide bounds for comprehensive search (original)',
+        'tolerance': None,  # Use bounds from OPTIMIZATION_PHASES as-is
+        'apply_stability_rules': False,
+    },
+    'narrow': {
+        'description': 'Narrow bounds ±30% around physics-based values',
+        'tolerance': 0.3,  # ±30% around expected values
+        'apply_stability_rules': True,  # Enforce D < P/10, I = 0.5-2.0×P, filter hierarchy
+    },
+    'adaptive': {
+        'description': 'Start narrow, expand if needed (not yet implemented)',
+        'tolerance': 0.3,
+        'apply_stability_rules': True,
+        'expansion_rate': 1.2,  # Expand by 20% each adaptation
+    }
+}
+
+
+def get_optimization_bounds(bounds_mode: str = 'wide'):
+    """
+    Get parameter bounds based on selected mode
+
+    Args:
+        bounds_mode: 'wide', 'narrow', or 'adaptive'
+
+    Returns:
+        Dictionary of optimization phases with bounds for each parameter
+    """
+    if bounds_mode == 'wide':
+        # Return original wide bounds from OPTIMIZATION_PHASES
+        return OPTIMIZATION_PHASES
+
+    elif bounds_mode == 'narrow':
+        # Generate narrow bounds dynamically using physics
+        from physics_based_seeding import generate_narrow_bounds
+
+        config = BOUNDS_MODE_CONFIG['narrow']
+        narrow_bounds_dict = generate_narrow_bounds(
+            drone_params=DRONE_PARAMS,
+            tolerance=config['tolerance'],
+            apply_stability_rules=config['apply_stability_rules']
+        )
+
+        # Merge narrow bounds with phase metadata from OPTIMIZATION_PHASES
+        result = {}
+        for phase_name, phase_config in OPTIMIZATION_PHASES.items():
+            result[phase_name] = {
+                'name': phase_config['name'],
+                'priority': phase_config['priority'],
+                'parameters': phase_config['parameters'],
+                'bounds': narrow_bounds_dict[phase_name]
+            }
+
+        return result
+
+    elif bounds_mode == 'adaptive':
+        # Start with narrow bounds (adaptive expansion not yet implemented)
+        # Future: Expand bounds during optimization if convergence stalls
+        return get_optimization_bounds('narrow')
+
+    else:
+        raise ValueError(f"Unknown bounds_mode: {bounds_mode}. Must be 'wide', 'narrow', or 'adaptive'")
