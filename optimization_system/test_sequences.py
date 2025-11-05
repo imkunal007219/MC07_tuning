@@ -174,7 +174,49 @@ class TestSequence:
         """Arm and takeoff to target altitude"""
         logger.info(f"Arming and taking off to {target_altitude}m")
 
+        # Wait for EKF initialization and position data
+        logger.info("Waiting for EKF initialization and position data...")
+        ekf_timeout = 30  # seconds
+        ekf_start = time.time()
+        ekf_ready = False
+
+        while time.time() - ekf_start < ekf_timeout:
+            # Try to get position data - this confirms EKF is initialized
+            lat, lon, alt = self.get_position()
+
+            if lat is not None and lon is not None and alt is not None:
+                logger.info(f"EKF initialized - Position data available: lat={lat:.6f}, lon={lon:.6f}, alt={alt:.2f}m")
+                ekf_ready = True
+                break
+
+            # Check GPS status
+            gps_msg = self.connection.recv_match(type='GPS_RAW_INT', blocking=False, timeout=0.5)
+            if gps_msg:
+                logger.debug(f"GPS fix type: {gps_msg.fix_type}, satellites: {gps_msg.satellites_visible}")
+
+            elapsed = int(time.time() - ekf_start)
+            if elapsed % 5 == 0:  # Log every 5 seconds
+                logger.info(f"Waiting for EKF... ({elapsed}s)")
+
+            time.sleep(0.5)
+
+        if not ekf_ready:
+            logger.error("EKF initialization timeout - cannot proceed with takeoff")
+            return False
+
+        # Wait 30 seconds for all sensors to initialize and pre-arm checks to pass
+        logger.info("⏳ Waiting 30 seconds for all sensors to initialize and pre-arm checks...")
+        wait_time = 30
+        for i in range(wait_time):
+            time.sleep(1)
+            if (i + 1) % 5 == 0:  # Log every 5 seconds
+                logger.info(f"   Sensors initializing... {i + 1}/{wait_time}s")
+        logger.info("✓ Sensor initialization wait complete")
+
         # Set mode to GUIDED
+        logger.info("=" * 60)
+        logger.info("📡 SENDING COMMAND: MODE GUIDED")
+        logger.info("=" * 60)
         mode = 'GUIDED'
         mode_id = self.connection.mode_mapping()[mode]
         self.connection.mav.set_mode_send(
@@ -184,33 +226,88 @@ class TestSequence:
 
         time.sleep(1)
 
+        # Wait for mode change confirmation
+        mode_confirmed = False
+        for _ in range(10):
+            heartbeat = self.connection.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
+            if heartbeat and heartbeat.custom_mode == mode_id:
+                logger.info("GUIDED mode confirmed")
+                mode_confirmed = True
+                break
+            time.sleep(0.5)
+
+        if not mode_confirmed:
+            logger.warning("Could not confirm GUIDED mode, proceeding anyway...")
+
         # Arm
+        logger.info("=" * 60)
+        logger.info("📡 SENDING COMMAND: ARM THROTTLE")
+        logger.info("=" * 60)
         self.connection.mav.command_long_send(
             self.connection.target_system,
             self.connection.target_component,
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
             0, 1, 0, 0, 0, 0, 0, 0)
 
-        # Wait for arming
-        time.sleep(2)
+        # Wait for arming confirmation
+        arm_start = time.time()
+        armed = False
+        while time.time() - arm_start < 10:
+            heartbeat = self.connection.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
+            if heartbeat and (heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
+                logger.info("Vehicle armed")
+                armed = True
+                break
+            time.sleep(0.5)
+
+        if not armed:
+            logger.error("Failed to arm vehicle")
+            return False
+
+        time.sleep(1)
 
         # Takeoff
+        logger.info("=" * 60)
+        logger.info(f"📡 SENDING COMMAND: TAKEOFF {target_altitude}m")
+        logger.info("=" * 60)
         self.connection.mav.command_long_send(
             self.connection.target_system,
             self.connection.target_component,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
             0, 0, 0, 0, 0, 0, 0, target_altitude)
 
-        # Wait for altitude
+        # Wait for altitude with detailed feedback
+        logger.info(f"Monitoring altitude during takeoff (timeout: 30s)...")
         start_time = time.time()
+        last_alt = 0
+        no_data_count = 0
+        last_log_time = start_time
+
         while time.time() - start_time < 30:
-            _, _, alt = self.get_position()
-            if alt and alt >= target_altitude * 0.95:
-                logger.info(f"Reached target altitude: {alt}m")
-                return True
+            lat, lon, alt = self.get_position()
+
+            if alt is not None:
+                no_data_count = 0
+                last_alt = alt
+
+                # Log altitude every 2 seconds for better visibility
+                if time.time() - last_log_time >= 2:
+                    elapsed = int(time.time() - start_time)
+                    logger.info(f"   ⬆️  Altitude: {alt:.2f}m / {target_altitude}m ({elapsed}s)")
+                    last_log_time = time.time()
+
+                if alt >= target_altitude * 0.95:
+                    logger.info(f"✓ Reached target altitude: {alt:.2f}m")
+                    return True
+            else:
+                no_data_count += 1
+                if no_data_count > 5:
+                    logger.warning("⚠️  Lost position data during takeoff")
+
             time.sleep(0.5)
 
-        logger.error("Takeoff timeout")
+        logger.error(f"✗ Takeoff timeout - final altitude: {last_alt:.2f}m (target: {target_altitude}m)")
+        logger.error(f"   Drone may have crashed or PIDs are not tuned correctly")
         return False
 
     def land_and_disarm(self) -> bool:

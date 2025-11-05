@@ -6,6 +6,7 @@ import argparse
 import sys
 import os
 import logging
+import signal
 from datetime import datetime
 
 # Add parent directory to path
@@ -16,6 +17,25 @@ from sitl_manager import SITLManager
 from optimizer import GeneticOptimizer, BayesianOptimizer
 from performance_evaluator import PerformanceEvaluator
 from utils import setup_logging, save_results
+
+# Global SITL manager for signal handler
+sitl_manager_global = None
+
+
+def signal_handler(sig, frame):
+    """Handle Ctrl+C gracefully"""
+    print("\n\n" + "="*80)
+    print("⚠️  CTRL+C DETECTED - CLEANING UP...")
+    print("="*80)
+
+    global sitl_manager_global
+    if sitl_manager_global:
+        print("🔄 Stopping all SITL instances...")
+        sitl_manager_global.cleanup()
+        print("✓ Cleanup complete")
+
+    print("👋 Exiting...")
+    sys.exit(0)
 
 
 def main():
@@ -38,6 +58,9 @@ def main():
 
     args = parser.parse_args()
 
+    # Register signal handler for Ctrl+C
+    signal.signal(signal.SIGINT, signal_handler)
+
     # Setup logging
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_file = f"{config.LOGGING_CONFIG['log_dir']}/optimization_{timestamp}.log"
@@ -55,10 +78,12 @@ def main():
     # Initialize components
     logger.info("\nInitializing components...")
 
+    global sitl_manager_global
     sitl_manager = SITLManager(
         num_instances=args.parallel,
         speedup=args.speedup
     )
+    sitl_manager_global = sitl_manager  # Store for signal handler
 
     performance_evaluator = PerformanceEvaluator()
 
