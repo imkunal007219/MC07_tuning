@@ -93,7 +93,9 @@ def main():
             sitl_manager=sitl_manager,
             evaluator=performance_evaluator,
             max_generations=args.generations,
-            population_size=config.OPTIMIZATION_CONFIG['population_size']
+            population_size=config.OPTIMIZATION_CONFIG['population_size'],
+            drone_params=config.DRONE_PARAMS,  # Enable physics-based seeding
+            use_physics_seeding=True  # Use control theory to seed population
         )
     else:
         optimizer = BayesianOptimizer(

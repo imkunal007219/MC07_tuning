@@ -19,6 +19,7 @@ import copy
 from flight_logger import FlightDataLogger
 from flight_analyzer import FlightAnalyzer
 from report_generator import ReportGenerator
+from physics_based_seeding import PhysicsBasedSeeder
 
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,8 @@ class GeneticOptimizer(BaseOptimizer):
 
     def __init__(self, sitl_manager, evaluator, max_generations: int = 100,
                  population_size: int = 50, mutation_rate: float = 0.2,
-                 crossover_rate: float = 0.7):
+                 crossover_rate: float = 0.7, drone_params: Dict = None,
+                 use_physics_seeding: bool = True):
         """
         Initialize Genetic Algorithm optimizer
 
@@ -87,6 +89,8 @@ class GeneticOptimizer(BaseOptimizer):
             population_size: Population size
             mutation_rate: Mutation probability
             crossover_rate: Crossover probability
+            drone_params: Dictionary of drone physical parameters
+            use_physics_seeding: Whether to use physics-based population seeding
         """
         super().__init__(sitl_manager, evaluator, max_generations)
         self.population_size = population_size
@@ -94,6 +98,15 @@ class GeneticOptimizer(BaseOptimizer):
         self.crossover_rate = crossover_rate
         self.toolbox = None
         self.checkpoint_freq = 10  # Save checkpoint every N generations
+
+        # Initialize physics-based seeding
+        self.use_physics_seeding = use_physics_seeding
+        self.physics_seeder = None
+        if use_physics_seeding and drone_params:
+            self.physics_seeder = PhysicsBasedSeeder(drone_params)
+            logger.info("Physics-based population seeding enabled")
+        else:
+            logger.info("Using random population initialization")
 
     def optimize(self, phase_name: str, parameters: List[str],
                 bounds: Dict[str, Tuple[float, float]],
@@ -113,7 +126,27 @@ class GeneticOptimizer(BaseOptimizer):
             pop, gen_start, hof = self._load_checkpoint(resume_from)
             logger.info(f"Resumed from generation {gen_start}")
         else:
-            pop = self.toolbox.population(n=self.population_size)
+            # Use physics-based seeding if available
+            if self.use_physics_seeding and self.physics_seeder:
+                logger.info("Generating physics-based initial population...")
+                population_list = self.physics_seeder.generate_population(
+                    parameters=parameters,
+                    bounds=bounds,
+                    population_size=self.population_size,
+                    seed_ratio=0.3,  # 30% seeded, 70% random for diversity
+                    diversity_sigma=0.15  # 15% variation around seed values
+                )
+                # Convert to DEAP individuals
+                pop = []
+                for individual_list in population_list:
+                    ind = creator.Individual(individual_list)
+                    pop.append(ind)
+                logger.info(f"Created population with {len(pop)} individuals (physics-seeded)")
+            else:
+                # Fallback to random initialization
+                pop = self.toolbox.population(n=self.population_size)
+                logger.info(f"Created random population with {len(pop)} individuals")
+
             gen_start = 0
             hof = tools.HallOfFame(1)
 
