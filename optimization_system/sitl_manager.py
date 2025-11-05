@@ -631,6 +631,10 @@ class SITLManager:
 
     def cleanup(self):
         """Cleanup all SITL instances"""
+        # Check if instances exist (in case cleanup called after failed __init__)
+        if not hasattr(self, 'instances'):
+            return
+
         logger.info("Cleaning up SITL instances...")
 
         # Set shutdown flag to prevent any new SITL starts
@@ -640,7 +644,8 @@ class SITLManager:
             self._kill_instance(instance)
 
         # No log files to close since we're not capturing output
-        self.log_files.clear()
+        if hasattr(self, 'log_files'):
+            self.log_files.clear()
 
         # Nuclear cleanup: kill any remaining SITL/MAVProxy processes
         logger.info("Killing any remaining SITL/MAVProxy processes...")
@@ -652,7 +657,8 @@ class SITLManager:
             logger.warning(f"Error in nuclear cleanup: {e}")
 
         # Clean up temporary directories
-        for i in range(self.num_instances):
+        num_instances = getattr(self, 'num_instances', 0)
+        for i in range(num_instances):
             work_dir = f"/tmp/sitl_instance_{i}"
             if os.path.exists(work_dir):
                 try:

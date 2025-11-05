@@ -39,8 +39,8 @@ def test_mission_sequence():
     # Initialize SITL manager with single instance
     sitl_manager = SITLManager(
         num_instances=1,
-        speedup=1,  # Real-time for better observation
-        show_console=True  # Show MAVProxy console
+        speedup=1  # Real-time for better observation
+        # Note: MAVProxy console is shown by default
     )
 
     try:
