@@ -305,6 +305,28 @@ CONVERGENCE_CONFIG = {
 }
 
 # ============================================================================
+# EARLY CRASH DETECTION CONFIGURATION
+# ============================================================================
+EARLY_CRASH_DETECTION_CONFIG = {
+    'enabled': True,
+    'check_interval': 0.5,          # seconds
+    'min_samples': 50,               # minimum data points before checking
+    'sensitivity': 'medium',         # 'low', 'medium', 'high'
+    'expected_time_savings': 0.75,   # 75% reduction in crash time (2 min → 30 sec)
+}
+
+# ============================================================================
+# INTELLIGENT TEST SEQUENCING CONFIGURATION
+# ============================================================================
+INTELLIGENT_TEST_SEQUENCING_CONFIG = {
+    'enabled': True,
+    'min_pass_score': 60.0,          # minimum score to pass a stage (0-100)
+    'enable_optional_tests': True,    # run optional tests (frequency, trajectory)
+    'early_termination': True,        # stop testing if fundamentals fail
+    'expected_time_savings': 0.40,    # 40% reduction in evaluation time
+}
+
+# ============================================================================
 # BOUNDS MODE CONFIGURATION
 # ============================================================================
 # The bounds in OPTIMIZATION_PHASES above are WIDE bounds for comprehensive search
