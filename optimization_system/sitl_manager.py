@@ -405,28 +405,44 @@ class SITLManager:
     def _kill_instance(self, instance: SITLInstance):
         """Kill a SITL instance process"""
         try:
+            # Close MAVLink connection properly to avoid reconnect attempts
             if instance.connection:
-                instance.connection.close()
-                instance.connection = None
+                try:
+                    # Send a final message to cleanly close
+                    instance.connection.close()
+                except Exception as e:
+                    logger.debug(f"Error closing connection for instance {instance.instance_id}: {e}")
+                finally:
+                    instance.connection = None
+
+            # Give MAVProxy a moment to process the close
+            time.sleep(0.2)
 
             if instance.process and instance.process.pid:
-                # Kill entire process group with proper error handling
+                # Kill entire process group (includes SITL, MAVProxy, and any child processes)
                 try:
+                    logger.debug(f"Killing process group for instance {instance.instance_id} (PID: {instance.process.pid})")
+
+                    # Send SIGTERM for graceful shutdown
                     os.killpg(os.getpgid(instance.process.pid), signal.SIGTERM)
 
                     # Wait for process to terminate
                     try:
-                        instance.process.wait(timeout=5)
+                        instance.process.wait(timeout=3)
+                        logger.debug(f"Instance {instance.instance_id} terminated gracefully")
                     except subprocess.TimeoutExpired:
                         # Force kill if still running
+                        logger.debug(f"Instance {instance.instance_id} did not terminate, forcing...")
                         try:
                             os.killpg(os.getpgid(instance.process.pid), signal.SIGKILL)
-                            instance.process.wait()
+                            instance.process.wait(timeout=2)
                         except (ProcessLookupError, OSError):
                             pass  # Process already terminated
-                except (ProcessLookupError, OSError):
+                except (ProcessLookupError, OSError) as e:
                     # Process already terminated
-                    pass
+                    logger.debug(f"Process {instance.instance_id} already terminated: {e}")
+                except Exception as e:
+                    logger.warning(f"Unexpected error killing instance {instance.instance_id}: {e}")
 
                 instance.process = None
 

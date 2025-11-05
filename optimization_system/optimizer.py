@@ -281,13 +281,21 @@ class GeneticOptimizer(BaseOptimizer):
         """
         Run test sequence and collect telemetry
 
-        This is a placeholder - actual implementation in test_sequences.py
+        Uses mission files for reliable, standardized testing.
         """
         # Import here to avoid circular dependency
-        from test_sequences import HoverStabilityTest
+        import os
+        from mission_executor import run_mission_test
 
-        test = HoverStabilityTest(connection, duration=duration)
-        return test.run()
+        # Use simple hover mission for testing
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
+
+        # Run mission with timeout based on expected duration
+        timeout = max(60.0, duration * 1.5)  # Add 50% buffer
+        logger.info(f"Running mission test: {mission_file} (timeout: {timeout}s)")
+
+        return run_mission_test(connection, mission_file, timeout)
 
     def _check_convergence(self) -> bool:
         """Check if optimization has converged"""
@@ -444,13 +452,21 @@ class BayesianOptimizer(BaseOptimizer):
         """
         Run test sequence and collect telemetry
 
-        This is a placeholder - actual implementation in test_sequences.py
+        Uses mission files for reliable, standardized testing.
         """
         # Import here to avoid circular dependency
-        from test_sequences import HoverStabilityTest
+        import os
+        from mission_executor import run_mission_test
 
-        test = HoverStabilityTest(connection, duration=duration)
-        return test.run()
+        # Use simple hover mission for testing
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
+
+        # Run mission with timeout based on expected duration
+        timeout = max(60.0, duration * 1.5)  # Add 50% buffer
+        logger.info(f"Running mission test: {mission_file} (timeout: {timeout}s)")
+
+        return run_mission_test(connection, mission_file, timeout)
 
     def _optuna_callback(self, study, trial):
         """Callback for Optuna trials"""
