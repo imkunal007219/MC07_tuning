@@ -602,13 +602,48 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
             logger.info(f"[{run_id}] Starting optimization for phase: {config.phase}")
             logger.info(f"[{run_id}] Optimizing {len(parameters)} parameters")
 
+            # Create progress callback that broadcasts WebSocket updates
+            def progress_callback(generation, best_fitness, avg_fitness, best_params):
+                """Callback called after each generation/trial"""
+                try:
+                    # Update state
+                    active_runs[run_id]['current_generation'] = generation
+                    active_runs[run_id]['best_fitness'] = best_fitness
+                    active_runs[run_id]['best_parameters'] = best_params
+                    active_runs[run_id]['fitness_history'].append(best_fitness)
+                    active_runs[run_id]['avg_fitness_history'].append(avg_fitness)
+                    active_runs[run_id]['completed_trials'] += config.population_size if config.algorithm == 'genetic' else 1
+
+                    # Broadcast update to WebSocket clients (use asyncio to schedule)
+                    message = {
+                        'type': 'generation_complete',
+                        'generation': generation,
+                        'best_fitness': best_fitness,
+                        'avg_fitness': avg_fitness,
+                        'best_parameters': best_params,
+                        'timestamp': datetime.now().isoformat()
+                    }
+
+                    # Schedule the async broadcast in the event loop
+                    loop = asyncio.get_event_loop()
+                    asyncio.run_coroutine_threadsafe(
+                        manager.broadcast(run_id, message),
+                        loop
+                    )
+
+                    logger.info(f"[{run_id}] Generation {generation}/{config.generations} - Best: {best_fitness:.4f}")
+
+                except Exception as e:
+                    logger.error(f"[{run_id}] Progress callback error: {e}")
+
             # Run optimization (this will block until complete)
             # Returns: (best_params, best_fitness, convergence_history)
             best_params, best_fitness, convergence_history = optimizer.optimize(
                 phase_name=config.phase,
                 parameters=parameters,
                 bounds=param_bounds,
-                resume_from=None
+                resume_from=None,
+                progress_callback=progress_callback
             )
 
             # Update final state after optimization completes

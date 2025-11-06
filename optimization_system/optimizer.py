@@ -152,8 +152,22 @@ class GeneticOptimizer(BaseOptimizer):
 
     def optimize(self, phase_name: str, parameters: List[str],
                 bounds: Dict[str, Tuple[float, float]],
-                resume_from: Optional[str] = None) -> Tuple[Dict, float, List]:
-        """Run genetic algorithm optimization"""
+                resume_from: Optional[str] = None,
+                progress_callback: Optional[Callable] = None) -> Tuple[Dict, float, List]:
+        """
+        Run genetic algorithm optimization
+
+        Args:
+            phase_name: Name of optimization phase
+            parameters: List of parameter names to optimize
+            bounds: Dictionary of (min, max) bounds for each parameter
+            resume_from: Path to checkpoint file to resume from
+            progress_callback: Optional callback function called after each generation
+                               Signature: callback(generation, best_fitness, avg_fitness, best_params)
+
+        Returns:
+            (best_params, best_fitness, convergence_history)
+        """
 
         logger.info(f"Starting GA optimization for {phase_name}")
         logger.info(f"Parameters to optimize: {parameters}")
@@ -247,6 +261,19 @@ class GeneticOptimizer(BaseOptimizer):
             logger.info(f"Avg fitness: {record['avg']:.4f}")
             logger.info(f"Max fitness: {record['max']:.4f}")
             logger.info(f"Best overall: {hof[0].fitness.values[0]:.4f}")
+
+            # Call progress callback if provided
+            if progress_callback:
+                try:
+                    best_params = self._individual_to_params(hof[0], parameters, bounds)
+                    progress_callback(
+                        generation=gen + 1,
+                        best_fitness=hof[0].fitness.values[0],
+                        avg_fitness=record['avg'],
+                        best_params=best_params
+                    )
+                except Exception as e:
+                    logger.warning(f"Progress callback failed: {e}")
 
             # Log current statistics
             stats_summary = self.flight_logger.get_statistics()
@@ -722,12 +749,29 @@ class BayesianOptimizer(BaseOptimizer):
 
     def optimize(self, phase_name: str, parameters: List[str],
                 bounds: Dict[str, Tuple[float, float]],
-                resume_from: Optional[str] = None) -> Tuple[Dict, float, List]:
-        """Run Bayesian optimization using Optuna"""
+                resume_from: Optional[str] = None,
+                progress_callback: Optional[Callable] = None) -> Tuple[Dict, float, List]:
+        """
+        Run Bayesian optimization using Optuna
+
+        Args:
+            phase_name: Name of optimization phase
+            parameters: List of parameter names to optimize
+            bounds: Dictionary of (min, max) bounds for each parameter
+            resume_from: Path to checkpoint file to resume from
+            progress_callback: Optional callback function called after each trial
+                               Signature: callback(generation, best_fitness, avg_fitness, best_params)
+
+        Returns:
+            (best_params, best_fitness, convergence_history)
+        """
 
         logger.info(f"Starting Bayesian optimization for {phase_name}")
         logger.info(f"Parameters to optimize: {parameters}")
         logger.info(f"Max trials: {self.max_iterations}")
+
+        # Store callback for use in objective function
+        self._progress_callback = progress_callback
 
         # Create study
         study_name = f"{phase_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -941,6 +985,22 @@ class BayesianOptimizer(BaseOptimizer):
             logger.info(f"Trial {trial.number} completed")
             logger.info(f"Current best fitness: {study.best_value:.4f}")
             logger.info(f"{'='*60}\n")
+
+        # Call progress callback if provided
+        if hasattr(self, '_progress_callback') and self._progress_callback:
+            try:
+                # Calculate average fitness from recent trials
+                recent_trials = study.trials[-min(10, len(study.trials)):]
+                avg_fitness = np.mean([t.value for t in recent_trials if t.value is not None])
+
+                self._progress_callback(
+                    generation=trial.number + 1,
+                    best_fitness=study.best_value,
+                    avg_fitness=float(avg_fitness),
+                    best_params=study.best_params
+                )
+            except Exception as e:
+                logger.warning(f"Progress callback failed: {e}")
 
 
 class HybridOptimizer(BaseOptimizer):
