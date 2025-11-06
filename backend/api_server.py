@@ -572,24 +572,47 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
             logger.info(f"[{run_id}] Using REAL optimization system with ArduPilot SITL")
 
             # Initialize SITL manager and evaluator
-            # Try multiple possible ArduPilot locations
+            # Find ArduPilot - try relative path first, then absolute paths
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(script_dir)  # Go up one level from backend/
+
             possible_paths = [
+                os.path.join(project_root, "ardupilot"),  # MC07_tuning/ardupilot
                 os.path.expanduser("~/Documents/MC07_tuning/ardupilot"),
                 os.path.expanduser("~/MC07_tuning/ardupilot"),
                 "/home/user/MC07_tuning/ardupilot"
             ]
 
             ardupilot_path = None
+            arducopter_binary = None
+
             for path in possible_paths:
-                if os.path.exists(os.path.join(path, "build/sitl/bin/arducopter")):
+                binary_path = os.path.join(path, "build/sitl/bin/arducopter")
+                if os.path.exists(binary_path):
                     ardupilot_path = path
+                    arducopter_binary = binary_path
                     logger.info(f"[{run_id}] Found ArduPilot at: {ardupilot_path}")
+                    logger.info(f"[{run_id}] ArduCopter binary: {arducopter_binary}")
                     break
 
             if ardupilot_path is None:
+                # Check if ardupilot directory exists but not built
+                for path in possible_paths:
+                    if os.path.exists(path) and os.path.exists(os.path.join(path, "waf")):
+                        raise FileNotFoundError(
+                            f"ArduPilot found at {path} but not built.\n\n"
+                            f"To build ArduPilot SITL, run:\n"
+                            f"  cd {path}\n"
+                            f"  . ~/.profile\n"
+                            f"  ./waf configure --board sitl\n"
+                            f"  ./waf copter\n\n"
+                            f"This will take 5-10 minutes on first build."
+                        )
+
                 raise FileNotFoundError(
-                    f"ArduPilot not found. Searched:\n" +
-                    "\n".join(f"  - {p}" for p in possible_paths)
+                    f"ArduPilot not found or not built. Searched:\n" +
+                    "\n".join(f"  - {p}" for p in possible_paths) +
+                    "\n\nPlease ensure ArduPilot is cloned and built."
                 )
 
             sitl_manager = SITLManager(
