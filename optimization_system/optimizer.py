@@ -477,7 +477,7 @@ class GeneticOptimizer(BaseOptimizer):
         otherwise falls back to single mission test.
         """
         import os
-        from mission_executor import MissionExecutor
+        from .mission_executor import MissionExecutor
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -486,7 +486,7 @@ class GeneticOptimizer(BaseOptimizer):
             return self._run_progressive_tests(connection, script_dir)
         else:
             # Fallback: single mission test
-            from mission_executor import run_mission_test
+            from .mission_executor import run_mission_test
             mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
             timeout = 120.0
             logger.info(f"Running single mission test: {mission_file}")
@@ -503,7 +503,7 @@ class GeneticOptimizer(BaseOptimizer):
         Returns:
             (overall_success, combined_telemetry)
         """
-        from mission_executor import MissionExecutor
+        from .mission_executor import MissionExecutor
 
         executor = MissionExecutor(connection, enable_early_crash_detection=True)
 
@@ -818,7 +818,7 @@ class BayesianOptimizer(BaseOptimizer):
         otherwise falls back to single mission test.
         """
         import os
-        from mission_executor import MissionExecutor
+        from .mission_executor import MissionExecutor
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -827,7 +827,7 @@ class BayesianOptimizer(BaseOptimizer):
             return self._run_progressive_tests(connection, script_dir)
         else:
             # Fallback: single mission test
-            from mission_executor import run_mission_test
+            from .mission_executor import run_mission_test
             mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
             timeout = 120.0
             logger.info(f"Running single mission test: {mission_file}")
@@ -844,7 +844,7 @@ class BayesianOptimizer(BaseOptimizer):
         Returns:
             (overall_success, combined_telemetry)
         """
-        from mission_executor import MissionExecutor
+        from .mission_executor import MissionExecutor
 
         executor = MissionExecutor(connection, enable_early_crash_detection=True)
 

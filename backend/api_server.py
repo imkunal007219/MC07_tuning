@@ -620,7 +620,7 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
             active_runs[run_id]['fitness_history'] = convergence_history
 
             # Clean up SITL instances
-            sitl_manager.shutdown_all()
+            sitl_manager.cleanup()
 
             # Mark as completed
             active_runs[run_id]['status'] = 'completed'
