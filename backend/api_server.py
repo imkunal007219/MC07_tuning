@@ -762,10 +762,27 @@ async def shutdown_event():
 
 if __name__ == "__main__":
     import uvicorn
+    import signal
+    import sys
+
+    # Handle Ctrl+C gracefully
+    def signal_handler(sig, frame):
+        logger.info("\n🛑 Received shutdown signal (Ctrl+C)")
+        logger.info("Cleaning up SITL processes...")
+        import subprocess
+        subprocess.run(['pkill', '-9', '-f', 'arducopter'], stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-9', '-f', 'mavproxy'], stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-9', '-f', 'sim_vehicle.py'], stderr=subprocess.DEVNULL)
+        logger.info("✓ Cleanup complete. Exiting...")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     uvicorn.run(
         "api_server:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        reload=False,  # Disable reload for proper signal handling
         log_level="info"
     )
