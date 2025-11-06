@@ -12,7 +12,7 @@ but fail when cascaded together.
 
 import logging
 from typing import Dict, Optional, Tuple
-from physics_based_seeding import (
+from .physics_based_seeding import (
     estimate_closed_loop_bandwidth,
     estimate_attitude_loop_bandwidth,
     estimate_position_loop_bandwidth,

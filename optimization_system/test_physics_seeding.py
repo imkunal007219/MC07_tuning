@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config
-from physics_based_seeding import PhysicsBasedSeeder
+from .physics_based_seeding import PhysicsBasedSeeder
 import numpy as np
 
 

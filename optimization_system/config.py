@@ -396,3 +396,17 @@ def get_optimization_bounds(bounds_mode: str = 'wide'):
 
     else:
         raise ValueError(f"Unknown bounds_mode: {bounds_mode}. Must be 'wide', 'narrow', or 'adaptive'")
+
+# ============================================================================
+# BACKWARDS COMPATIBILITY EXPORTS (for api_server.py)
+# ============================================================================
+
+# Flatten all parameter bounds from all phases into a single dictionary
+PARAMETER_BOUNDS = {}
+for phase_name, phase_config in OPTIMIZATION_PHASES.items():
+    if 'bounds' in phase_config:
+        for param, bounds in phase_config['bounds'].items():
+            PARAMETER_BOUNDS[param] = {'min': bounds[0], 'max': bounds[1]}
+
+# Alias for backwards compatibility
+DRONE_SPECS = DRONE_PARAMS
