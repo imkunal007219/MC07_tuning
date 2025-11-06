@@ -168,10 +168,7 @@ manager = ConnectionManager()
 # ============================================================
 
 @app.post("/api/optimization/start", response_model=Dict[str, str])
-async def start_optimization(
-    config: OptimizationConfig,
-    background_tasks: BackgroundTasks
-):
+async def start_optimization(config: OptimizationConfig):
     """Start a new optimization run"""
     run_id = str(uuid.uuid4())[:8]
 
@@ -194,8 +191,8 @@ async def start_optimization(
         'phase_history': []
     }
 
-    # Start optimization in background
-    background_tasks.add_task(run_optimization, run_id, config)
+    # Start optimization in background using asyncio.create_task (true async)
+    asyncio.create_task(run_optimization(run_id, config))
 
     return {
         "run_id": run_id,
