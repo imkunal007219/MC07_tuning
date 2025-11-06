@@ -15,9 +15,9 @@ import os
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flight_logger import FlightDataLogger
-from flight_analyzer import FlightAnalyzer
-from report_generator import ReportGenerator
+from .flight_logger import FlightDataLogger
+from .flight_analyzer import FlightAnalyzer
+from .report_generator import ReportGenerator
 
 
 def create_sample_telemetry(success: bool = True, duration: float = 30.0):

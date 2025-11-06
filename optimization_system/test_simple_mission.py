@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from pymavlink import mavutil
-from mission_executor import MissionExecutor
+from .mission_executor import MissionExecutor
 
 
 def test_simple_mission():

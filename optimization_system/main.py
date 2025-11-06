@@ -13,10 +13,10 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config
-from sitl_manager import SITLManager
+from .sitl_manager import SITLManager
 from optimizer import GeneticOptimizer, BayesianOptimizer
-from performance_evaluator import PerformanceEvaluator
-from utils import setup_logging, save_results
+from .performance_evaluator import PerformanceEvaluator
+from .utils import setup_logging, save_results
 
 # Try to import multi-objective optimizer (requires pymoo)
 try:

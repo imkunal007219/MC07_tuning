@@ -18,8 +18,8 @@ import logging
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from sitl_manager import SITLManager
-from mission_executor import MissionExecutor
+from .sitl_manager import SITLManager
+from .mission_executor import MissionExecutor
 
 # Setup logging
 logging.basicConfig(

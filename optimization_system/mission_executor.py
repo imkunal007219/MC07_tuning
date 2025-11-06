@@ -11,9 +11,9 @@ from typing import Tuple, Dict
 from pymavlink import mavutil
 import numpy as np
 
-from mission_loader import MissionLoader
-from early_crash_detection import EarlyCrashDetector
-from config import EARLY_CRASH_DETECTION_CONFIG
+from .mission_loader import MissionLoader
+from .early_crash_detection import EarlyCrashDetector
+from .config import EARLY_CRASH_DETECTION_CONFIG
 
 logger = logging.getLogger(__name__)
 

@@ -16,12 +16,12 @@ from optuna.samplers import TPESampler
 from datetime import datetime
 import copy
 
-from flight_logger import FlightDataLogger
-from flight_analyzer import FlightAnalyzer
-from report_generator import ReportGenerator
-from physics_based_seeding import PhysicsBasedSeeder
-from hierarchical_constraints import HierarchicalConstraintValidator
-from intelligent_test_sequencing import IntelligentTestSequencer
+from .flight_logger import FlightDataLogger
+from .flight_analyzer import FlightAnalyzer
+from .report_generator import ReportGenerator
+from .physics_based_seeding import PhysicsBasedSeeder
+from .hierarchical_constraints import HierarchicalConstraintValidator
+from .intelligent_test_sequencing import IntelligentTestSequencer
 
 
 logger = logging.getLogger(__name__)

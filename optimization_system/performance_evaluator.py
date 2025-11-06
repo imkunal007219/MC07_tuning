@@ -13,7 +13,7 @@ from scipy.fft import fft, fftfreq
 from scipy.signal import welch
 import math
 
-from frequency_domain_analysis import (
+from .frequency_domain_analysis import (
     analyze_telemetry_frequency_domain,
     calculate_frequency_domain_fitness
 )
