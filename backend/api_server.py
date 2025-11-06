@@ -553,8 +553,25 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
             logger.info(f"[{run_id}] Using REAL optimization system with ArduPilot SITL")
 
             # Initialize SITL manager and evaluator
-            ardupilot_path = os.path.expanduser("~/MC07_tuning/ardupilot")
-            logger.info(f"[{run_id}] ArduPilot path: {ardupilot_path}")
+            # Try multiple possible ArduPilot locations
+            possible_paths = [
+                os.path.expanduser("~/Documents/MC07_tuning/ardupilot"),
+                os.path.expanduser("~/MC07_tuning/ardupilot"),
+                "/home/user/MC07_tuning/ardupilot"
+            ]
+
+            ardupilot_path = None
+            for path in possible_paths:
+                if os.path.exists(os.path.join(path, "build/sitl/bin/arducopter")):
+                    ardupilot_path = path
+                    logger.info(f"[{run_id}] Found ArduPilot at: {ardupilot_path}")
+                    break
+
+            if ardupilot_path is None:
+                raise FileNotFoundError(
+                    f"ArduPilot not found. Searched:\n" +
+                    "\n".join(f"  - {p}" for p in possible_paths)
+                )
 
             sitl_manager = SITLManager(
                 num_instances=config.parallel_instances,
