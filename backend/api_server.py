@@ -16,21 +16,47 @@ import uuid
 import sys
 import os
 
-# Add optimization_system to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-from optimization_system.optimizer import GeneticOptimizer, BayesianOptimizer
-from optimization_system.sitl_manager import SITLManager
-from optimization_system.performance_evaluator import PerformanceEvaluator
-from optimization_system.flight_logger import FlightDataLogger
-from optimization_system.config import PARAMETER_BOUNDS, DRONE_SPECS
-
-# Setup logging
+# Setup logging FIRST
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Add optimization_system to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+# Try to import optimization system (optional - dashboard works standalone)
+try:
+    from optimization_system.optimizer import GeneticOptimizer, BayesianOptimizer
+    from optimization_system.sitl_manager import SITLManager
+    from optimization_system.performance_evaluator import PerformanceEvaluator
+    from optimization_system.flight_logger import FlightDataLogger
+    from optimization_system.config import PARAMETER_BOUNDS, DRONE_SPECS
+    OPTIMIZATION_AVAILABLE = True
+    logger.info("✓ Optimization system loaded successfully")
+except ImportError as e:
+    logger.warning(f"⚠️  Optimization system not fully available: {e}")
+    logger.warning("🔧 Dashboard will run in DEMO MODE with mock data")
+    OPTIMIZATION_AVAILABLE = False
+    # Mock parameter bounds for demo mode
+    PARAMETER_BOUNDS = {
+        "ATC_RAT_RLL_P": {"min": 0.08, "max": 0.25},
+        "ATC_RAT_RLL_I": {"min": 0.05, "max": 0.15},
+        "ATC_RAT_RLL_D": {"min": 0.003, "max": 0.012},
+        "ATC_RAT_PIT_P": {"min": 0.08, "max": 0.25},
+        "ATC_RAT_PIT_I": {"min": 0.05, "max": 0.15},
+        "ATC_RAT_PIT_D": {"min": 0.003, "max": 0.012},
+        "ATC_RAT_YAW_P": {"min": 0.3, "max": 0.6},
+        "ATC_RAT_YAW_I": {"min": 0.03, "max": 0.06},
+        "ATC_ANG_RLL_P": {"min": 3.5, "max": 6.0},
+        "ATC_ANG_PIT_P": {"min": 3.5, "max": 6.0},
+        "ATC_ANG_YAW_P": {"min": 3.5, "max": 6.0}
+    }
+    DRONE_SPECS = {
+        "mass": 30.0,
+        "frame_type": "X-frame quadcopter"
+    }
 
 # Initialize FastAPI app
 app = FastAPI(
