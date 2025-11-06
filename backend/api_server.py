@@ -536,7 +536,7 @@ async def get_frequency_response(run_id: str, axis: str = "roll"):
 async def run_optimization(run_id: str, config: OptimizationConfig):
     """
     Main optimization loop - runs in background
-    Integrates with existing optimization system
+    Integrates with real optimization system or uses mock data
     """
     try:
         # Update status
@@ -548,65 +548,148 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
 
         logger.info(f"[{run_id}] Starting optimization with {config.algorithm}")
 
-        # Mock optimization for now (replace with actual optimizer integration)
-        for generation in range(config.generations):
-            # Check if paused or stopped
-            while active_runs[run_id]['status'] == 'paused':
-                await asyncio.sleep(1)
+        if OPTIMIZATION_AVAILABLE:
+            # ===== REAL OPTIMIZATION WITH SITL =====
+            logger.info(f"[{run_id}] Using REAL optimization system with ArduPilot SITL")
 
-            if active_runs[run_id]['status'] == 'stopped':
-                logger.info(f"[{run_id}] Optimization stopped by user")
-                break
+            # Initialize SITL manager and evaluator
+            sitl_manager = SITLManager(
+                num_instances=config.parallel_instances,
+                ardupilot_path=os.path.expanduser("~/Documents/MC07_tuning/ardupilot")
+            )
+            evaluator = PerformanceEvaluator()
 
-            # Simulate generation (in real implementation, call optimizer)
-            await asyncio.sleep(2)  # Simulate work
+            # Get parameter bounds for the selected phase
+            from optimization_system.config import OPTIMIZATION_PHASES
+            phase_config = OPTIMIZATION_PHASES.get(config.phase, OPTIMIZATION_PHASES['phase1_rate'])
+            param_bounds = phase_config['bounds']
 
-            # Generate mock results
-            import random
-            best_fitness = 0.5 + (generation / config.generations) * 0.4 + random.uniform(-0.05, 0.05)
-            avg_fitness = best_fitness - random.uniform(0.1, 0.2)
+            # Create optimizer
+            if config.algorithm == 'genetic':
+                optimizer = GeneticOptimizer(
+                    sitl_manager=sitl_manager,
+                    evaluator=evaluator,
+                    max_iterations=config.generations,
+                    population_size=config.population_size,
+                    log_dir=f"flight_logs/{run_id}"
+                )
+            else:
+                optimizer = BayesianOptimizer(
+                    sitl_manager=sitl_manager,
+                    evaluator=evaluator,
+                    max_iterations=config.generations,
+                    log_dir=f"flight_logs/{run_id}"
+                )
 
-            best_params = {
-                'ATC_RAT_RLL_P': 0.15 + random.uniform(-0.02, 0.02),
-                'ATC_RAT_RLL_I': 0.10 + random.uniform(-0.01, 0.01),
-                'ATC_RAT_RLL_D': 0.008 + random.uniform(-0.001, 0.001),
-                'ATC_RAT_PIT_P': 0.15 + random.uniform(-0.02, 0.02),
-                'ATC_RAT_PIT_I': 0.10 + random.uniform(-0.01, 0.01),
-                'ATC_RAT_PIT_D': 0.008 + random.uniform(-0.001, 0.001),
-            }
+            # Custom callback to broadcast updates
+            def generation_callback(generation, best_fitness, best_params, avg_fitness):
+                # Update state
+                active_runs[run_id]['current_generation'] = generation
+                active_runs[run_id]['best_fitness'] = best_fitness
+                active_runs[run_id]['best_parameters'] = best_params
+                active_runs[run_id]['fitness_history'].append(best_fitness)
+                active_runs[run_id]['avg_fitness_history'].append(avg_fitness)
+                active_runs[run_id]['completed_trials'] += config.population_size
 
-            # Update state
-            active_runs[run_id]['current_generation'] = generation + 1
+                # Broadcast via WebSocket (need to run in event loop)
+                asyncio.create_task(manager.broadcast(run_id, {
+                    'type': 'generation_complete',
+                    'generation': generation,
+                    'best_fitness': best_fitness,
+                    'avg_fitness': avg_fitness,
+                    'best_parameters': best_params,
+                    'timestamp': datetime.now().isoformat()
+                }))
+
+                logger.info(f"[{run_id}] Generation {generation}/{config.generations} - Best: {best_fitness:.4f}")
+
+                # Check for stop signal
+                return active_runs[run_id]['status'] != 'stopped'
+
+            # Run optimization
+            best_params, best_fitness = optimizer.optimize(
+                parameter_bounds=param_bounds,
+                callback=generation_callback
+            )
+
+            # Clean up SITL instances
+            sitl_manager.shutdown_all()
+
+            # Mark as completed
+            active_runs[run_id]['status'] = 'completed'
             active_runs[run_id]['best_fitness'] = best_fitness
             active_runs[run_id]['best_parameters'] = best_params
-            active_runs[run_id]['fitness_history'].append(best_fitness)
-            active_runs[run_id]['avg_fitness_history'].append(avg_fitness)
-            active_runs[run_id]['completed_trials'] += config.population_size
 
-            # Broadcast update to all connected clients
             await manager.broadcast(run_id, {
-                'type': 'generation_complete',
-                'generation': generation + 1,
-                'best_fitness': best_fitness,
-                'avg_fitness': avg_fitness,
-                'best_parameters': best_params,
-                'timestamp': datetime.now().isoformat()
+                'type': 'optimization_complete',
+                'final_fitness': best_fitness,
+                'final_parameters': best_params
             })
 
-            logger.info(f"[{run_id}] Generation {generation+1}/{config.generations} - Best: {best_fitness:.4f}")
+            logger.info(f"[{run_id}] REAL optimization completed - Best fitness: {best_fitness:.4f}")
 
-        # Mark as completed
-        active_runs[run_id]['status'] = 'completed'
-        await manager.broadcast(run_id, {
-            'type': 'optimization_complete',
-            'final_fitness': active_runs[run_id]['best_fitness'],
-            'final_parameters': active_runs[run_id]['best_parameters']
-        })
+        else:
+            # ===== MOCK OPTIMIZATION (DEMO MODE) =====
+            logger.info(f"[{run_id}] Using MOCK optimization (DEMO MODE)")
 
-        logger.info(f"[{run_id}] Optimization completed successfully")
+            for generation in range(config.generations):
+                # Check if paused or stopped
+                while active_runs[run_id]['status'] == 'paused':
+                    await asyncio.sleep(1)
+
+                if active_runs[run_id]['status'] == 'stopped':
+                    logger.info(f"[{run_id}] Optimization stopped by user")
+                    break
+
+                # Simulate generation
+                await asyncio.sleep(2)
+
+                # Generate mock results
+                import random
+                best_fitness = 0.5 + (generation / config.generations) * 0.4 + random.uniform(-0.05, 0.05)
+                avg_fitness = best_fitness - random.uniform(0.1, 0.2)
+
+                best_params = {
+                    'ATC_RAT_RLL_P': 0.15 + random.uniform(-0.02, 0.02),
+                    'ATC_RAT_RLL_I': 0.10 + random.uniform(-0.01, 0.01),
+                    'ATC_RAT_RLL_D': 0.008 + random.uniform(-0.001, 0.001),
+                    'ATC_RAT_PIT_P': 0.15 + random.uniform(-0.02, 0.02),
+                    'ATC_RAT_PIT_I': 0.10 + random.uniform(-0.01, 0.01),
+                    'ATC_RAT_PIT_D': 0.008 + random.uniform(-0.001, 0.001),
+                }
+
+                # Update state
+                active_runs[run_id]['current_generation'] = generation + 1
+                active_runs[run_id]['best_fitness'] = best_fitness
+                active_runs[run_id]['best_parameters'] = best_params
+                active_runs[run_id]['fitness_history'].append(best_fitness)
+                active_runs[run_id]['avg_fitness_history'].append(avg_fitness)
+                active_runs[run_id]['completed_trials'] += config.population_size
+
+                # Broadcast update
+                await manager.broadcast(run_id, {
+                    'type': 'generation_complete',
+                    'generation': generation + 1,
+                    'best_fitness': best_fitness,
+                    'avg_fitness': avg_fitness,
+                    'best_parameters': best_params,
+                    'timestamp': datetime.now().isoformat()
+                })
+
+                logger.info(f"[{run_id}] Generation {generation+1}/{config.generations} - Best: {best_fitness:.4f}")
+
+            # Mark as completed
+            active_runs[run_id]['status'] = 'completed'
+            await manager.broadcast(run_id, {
+                'type': 'optimization_complete',
+                'final_fitness': active_runs[run_id]['best_fitness'],
+                'final_parameters': active_runs[run_id]['best_parameters']
+            })
+
+            logger.info(f"[{run_id}] MOCK optimization completed")
 
     except Exception as e:
-        logger.error(f"[{run_id}] Optimization failed: {e}")
+        logger.error(f"[{run_id}] Optimization failed: {e}", exc_info=True)
         active_runs[run_id]['status'] = 'failed'
         await manager.broadcast(run_id, {
             'type': 'error',
