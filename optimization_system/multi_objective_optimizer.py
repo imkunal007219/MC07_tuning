@@ -268,7 +268,7 @@ class MultiObjectiveOptimizer:
     def _run_test_sequence(self, connection, duration: float) -> Tuple[bool, Dict]:
         """Run test sequence and collect telemetry"""
         import os
-        from mission_executor import run_mission_test
+        from .mission_executor import run_mission_test
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
         mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")

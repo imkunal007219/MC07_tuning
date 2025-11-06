@@ -5,6 +5,7 @@ Implements both Genetic Algorithm and Bayesian Optimization
 """
 
 import numpy as np
+import os
 import logging
 from typing import Dict, List, Tuple, Optional, Callable
 from abc import ABC, abstractmethod
@@ -130,11 +131,10 @@ class GeneticOptimizer(BaseOptimizer):
         self.use_intelligent_sequencing = use_intelligent_sequencing
         self.test_sequencer = None
         if use_intelligent_sequencing:
-            from config import INTELLIGENT_TEST_SEQUENCING_CONFIG
+            from .config import INTELLIGENT_TEST_SEQUENCING_CONFIG
             self.test_sequencer = IntelligentTestSequencer(
                 min_pass_score=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('min_pass_score', 60.0),
-                enable_optional_tests=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('enable_optional_tests', True),
-                early_termination=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('early_termination', True)
+                enable_optional_tests=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('enable_optional_tests', True)
             )
             logger.info("Intelligent test sequencing enabled (saves ~40% evaluation time)")
         else:
@@ -478,7 +478,7 @@ class GeneticOptimizer(BaseOptimizer):
         otherwise falls back to single mission test.
         """
         import os
-        from mission_executor import MissionExecutor
+        from .mission_executor import MissionExecutor
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -487,7 +487,7 @@ class GeneticOptimizer(BaseOptimizer):
             return self._run_progressive_tests(connection, script_dir)
         else:
             # Fallback: single mission test
-            from mission_executor import run_mission_test
+            from .mission_executor import run_mission_test
             mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
             timeout = 120.0
             logger.info(f"Running single mission test: {mission_file}")
@@ -504,7 +504,7 @@ class GeneticOptimizer(BaseOptimizer):
         Returns:
             (overall_success, combined_telemetry)
         """
-        from mission_executor import MissionExecutor
+        from .mission_executor import MissionExecutor
 
         executor = MissionExecutor(connection, enable_early_crash_detection=True)
 
@@ -711,11 +711,10 @@ class BayesianOptimizer(BaseOptimizer):
         self.use_intelligent_sequencing = use_intelligent_sequencing
         self.test_sequencer = None
         if use_intelligent_sequencing:
-            from config import INTELLIGENT_TEST_SEQUENCING_CONFIG
+            from .config import INTELLIGENT_TEST_SEQUENCING_CONFIG
             self.test_sequencer = IntelligentTestSequencer(
                 min_pass_score=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('min_pass_score', 60.0),
-                enable_optional_tests=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('enable_optional_tests', True),
-                early_termination=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('early_termination', True)
+                enable_optional_tests=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('enable_optional_tests', True)
             )
             logger.info("Intelligent test sequencing enabled (saves ~40% evaluation time)")
         else:
@@ -820,7 +819,7 @@ class BayesianOptimizer(BaseOptimizer):
         otherwise falls back to single mission test.
         """
         import os
-        from mission_executor import MissionExecutor
+        from .mission_executor import MissionExecutor
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -829,7 +828,7 @@ class BayesianOptimizer(BaseOptimizer):
             return self._run_progressive_tests(connection, script_dir)
         else:
             # Fallback: single mission test
-            from mission_executor import run_mission_test
+            from .mission_executor import run_mission_test
             mission_file = os.path.join(script_dir, "missions", "simple_hover.waypoints")
             timeout = 120.0
             logger.info(f"Running single mission test: {mission_file}")
@@ -846,7 +845,7 @@ class BayesianOptimizer(BaseOptimizer):
         Returns:
             (overall_success, combined_telemetry)
         """
-        from mission_executor import MissionExecutor
+        from .mission_executor import MissionExecutor
 
         executor = MissionExecutor(connection, enable_early_crash_detection=True)
 

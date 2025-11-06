@@ -168,10 +168,7 @@ manager = ConnectionManager()
 # ============================================================
 
 @app.post("/api/optimization/start", response_model=Dict[str, str])
-async def start_optimization(
-    config: OptimizationConfig,
-    background_tasks: BackgroundTasks
-):
+async def start_optimization(config: OptimizationConfig):
     """Start a new optimization run"""
     run_id = str(uuid.uuid4())[:8]
 
@@ -194,8 +191,8 @@ async def start_optimization(
         'phase_history': []
     }
 
-    # Start optimization in background
-    background_tasks.add_task(run_optimization, run_id, config)
+    # Start optimization in background using asyncio.create_task (true async)
+    asyncio.create_task(run_optimization(run_id, config))
 
     return {
         "run_id": run_id,
@@ -536,7 +533,7 @@ async def get_frequency_response(run_id: str, axis: str = "roll"):
 async def run_optimization(run_id: str, config: OptimizationConfig):
     """
     Main optimization loop - runs in background
-    Integrates with existing optimization system
+    Integrates with real optimization system or uses mock data
     """
     try:
         # Update status
@@ -548,65 +545,155 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
 
         logger.info(f"[{run_id}] Starting optimization with {config.algorithm}")
 
-        # Mock optimization for now (replace with actual optimizer integration)
-        for generation in range(config.generations):
-            # Check if paused or stopped
-            while active_runs[run_id]['status'] == 'paused':
-                await asyncio.sleep(1)
+        if OPTIMIZATION_AVAILABLE:
+            # ===== REAL OPTIMIZATION WITH SITL =====
+            logger.info(f"[{run_id}] Using REAL optimization system with ArduPilot SITL")
 
-            if active_runs[run_id]['status'] == 'stopped':
-                logger.info(f"[{run_id}] Optimization stopped by user")
-                break
+            # Initialize SITL manager and evaluator
+            # Try multiple possible ArduPilot locations
+            possible_paths = [
+                os.path.expanduser("~/Documents/MC07_tuning/ardupilot"),
+                os.path.expanduser("~/MC07_tuning/ardupilot"),
+                "/home/user/MC07_tuning/ardupilot"
+            ]
 
-            # Simulate generation (in real implementation, call optimizer)
-            await asyncio.sleep(2)  # Simulate work
+            ardupilot_path = None
+            for path in possible_paths:
+                if os.path.exists(os.path.join(path, "build/sitl/bin/arducopter")):
+                    ardupilot_path = path
+                    logger.info(f"[{run_id}] Found ArduPilot at: {ardupilot_path}")
+                    break
 
-            # Generate mock results
-            import random
-            best_fitness = 0.5 + (generation / config.generations) * 0.4 + random.uniform(-0.05, 0.05)
-            avg_fitness = best_fitness - random.uniform(0.1, 0.2)
+            if ardupilot_path is None:
+                raise FileNotFoundError(
+                    f"ArduPilot not found. Searched:\n" +
+                    "\n".join(f"  - {p}" for p in possible_paths)
+                )
 
-            best_params = {
-                'ATC_RAT_RLL_P': 0.15 + random.uniform(-0.02, 0.02),
-                'ATC_RAT_RLL_I': 0.10 + random.uniform(-0.01, 0.01),
-                'ATC_RAT_RLL_D': 0.008 + random.uniform(-0.001, 0.001),
-                'ATC_RAT_PIT_P': 0.15 + random.uniform(-0.02, 0.02),
-                'ATC_RAT_PIT_I': 0.10 + random.uniform(-0.01, 0.01),
-                'ATC_RAT_PIT_D': 0.008 + random.uniform(-0.001, 0.001),
-            }
+            sitl_manager = SITLManager(
+                num_instances=config.parallel_instances,
+                ardupilot_path=ardupilot_path
+            )
+            evaluator = PerformanceEvaluator()
 
-            # Update state
-            active_runs[run_id]['current_generation'] = generation + 1
+            # Get parameter bounds for the selected phase
+            from optimization_system.config import OPTIMIZATION_PHASES
+            phase_config = OPTIMIZATION_PHASES.get(config.phase, OPTIMIZATION_PHASES['phase1_rate'])
+            param_bounds = phase_config['bounds']
+
+            # Create optimizer with correct parameter names
+            if config.algorithm == 'genetic':
+                optimizer = GeneticOptimizer(
+                    sitl_manager=sitl_manager,
+                    evaluator=evaluator,
+                    max_generations=config.generations,  # GeneticOptimizer uses max_generations
+                    population_size=config.population_size
+                )
+            else:
+                optimizer = BayesianOptimizer(
+                    sitl_manager=sitl_manager,
+                    evaluator=evaluator,
+                    max_iterations=config.generations  # BayesianOptimizer uses max_iterations
+                )
+
+            # Extract parameter names and bounds
+            parameters = list(param_bounds.keys())
+
+            logger.info(f"[{run_id}] Starting optimization for phase: {config.phase}")
+            logger.info(f"[{run_id}] Optimizing {len(parameters)} parameters")
+
+            # Run optimization (this will block until complete)
+            # Returns: (best_params, best_fitness, convergence_history)
+            best_params, best_fitness, convergence_history = optimizer.optimize(
+                phase_name=config.phase,
+                parameters=parameters,
+                bounds=param_bounds,
+                resume_from=None
+            )
+
+            # Update final state after optimization completes
+            active_runs[run_id]['best_parameters'] = best_params
+            active_runs[run_id]['best_fitness'] = best_fitness
+            active_runs[run_id]['fitness_history'] = convergence_history
+
+            # Clean up SITL instances
+            sitl_manager.cleanup()
+
+            # Mark as completed
+            active_runs[run_id]['status'] = 'completed'
             active_runs[run_id]['best_fitness'] = best_fitness
             active_runs[run_id]['best_parameters'] = best_params
-            active_runs[run_id]['fitness_history'].append(best_fitness)
-            active_runs[run_id]['avg_fitness_history'].append(avg_fitness)
-            active_runs[run_id]['completed_trials'] += config.population_size
 
-            # Broadcast update to all connected clients
             await manager.broadcast(run_id, {
-                'type': 'generation_complete',
-                'generation': generation + 1,
-                'best_fitness': best_fitness,
-                'avg_fitness': avg_fitness,
-                'best_parameters': best_params,
-                'timestamp': datetime.now().isoformat()
+                'type': 'optimization_complete',
+                'final_fitness': best_fitness,
+                'final_parameters': best_params
             })
 
-            logger.info(f"[{run_id}] Generation {generation+1}/{config.generations} - Best: {best_fitness:.4f}")
+            logger.info(f"[{run_id}] REAL optimization completed - Best fitness: {best_fitness:.4f}")
 
-        # Mark as completed
-        active_runs[run_id]['status'] = 'completed'
-        await manager.broadcast(run_id, {
-            'type': 'optimization_complete',
-            'final_fitness': active_runs[run_id]['best_fitness'],
-            'final_parameters': active_runs[run_id]['best_parameters']
-        })
+        else:
+            # ===== MOCK OPTIMIZATION (DEMO MODE) =====
+            logger.info(f"[{run_id}] Using MOCK optimization (DEMO MODE)")
 
-        logger.info(f"[{run_id}] Optimization completed successfully")
+            for generation in range(config.generations):
+                # Check if paused or stopped
+                while active_runs[run_id]['status'] == 'paused':
+                    await asyncio.sleep(1)
+
+                if active_runs[run_id]['status'] == 'stopped':
+                    logger.info(f"[{run_id}] Optimization stopped by user")
+                    break
+
+                # Simulate generation
+                await asyncio.sleep(2)
+
+                # Generate mock results
+                import random
+                best_fitness = 0.5 + (generation / config.generations) * 0.4 + random.uniform(-0.05, 0.05)
+                avg_fitness = best_fitness - random.uniform(0.1, 0.2)
+
+                best_params = {
+                    'ATC_RAT_RLL_P': 0.15 + random.uniform(-0.02, 0.02),
+                    'ATC_RAT_RLL_I': 0.10 + random.uniform(-0.01, 0.01),
+                    'ATC_RAT_RLL_D': 0.008 + random.uniform(-0.001, 0.001),
+                    'ATC_RAT_PIT_P': 0.15 + random.uniform(-0.02, 0.02),
+                    'ATC_RAT_PIT_I': 0.10 + random.uniform(-0.01, 0.01),
+                    'ATC_RAT_PIT_D': 0.008 + random.uniform(-0.001, 0.001),
+                }
+
+                # Update state
+                active_runs[run_id]['current_generation'] = generation + 1
+                active_runs[run_id]['best_fitness'] = best_fitness
+                active_runs[run_id]['best_parameters'] = best_params
+                active_runs[run_id]['fitness_history'].append(best_fitness)
+                active_runs[run_id]['avg_fitness_history'].append(avg_fitness)
+                active_runs[run_id]['completed_trials'] += config.population_size
+
+                # Broadcast update
+                await manager.broadcast(run_id, {
+                    'type': 'generation_complete',
+                    'generation': generation + 1,
+                    'best_fitness': best_fitness,
+                    'avg_fitness': avg_fitness,
+                    'best_parameters': best_params,
+                    'timestamp': datetime.now().isoformat()
+                })
+
+                logger.info(f"[{run_id}] Generation {generation+1}/{config.generations} - Best: {best_fitness:.4f}")
+
+            # Mark as completed
+            active_runs[run_id]['status'] = 'completed'
+            await manager.broadcast(run_id, {
+                'type': 'optimization_complete',
+                'final_fitness': active_runs[run_id]['best_fitness'],
+                'final_parameters': active_runs[run_id]['best_parameters']
+            })
+
+            logger.info(f"[{run_id}] MOCK optimization completed")
 
     except Exception as e:
-        logger.error(f"[{run_id}] Optimization failed: {e}")
+        logger.error(f"[{run_id}] Optimization failed: {e}", exc_info=True)
         active_runs[run_id]['status'] = 'failed'
         await manager.broadcast(run_id, {
             'type': 'error',
@@ -658,16 +745,44 @@ async def shutdown_event():
         if active_runs[run_id]['status'] == 'running':
             active_runs[run_id]['status'] = 'stopped'
 
+    # Kill any remaining SITL/MAVProxy processes
+    logger.info("Cleaning up SITL instances...")
+    import subprocess
+    try:
+        subprocess.run(['pkill', '-9', '-f', 'arducopter'], stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-9', '-f', 'mavproxy'], stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-9', '-f', 'sim_vehicle.py'], stderr=subprocess.DEVNULL)
+        logger.info("✓ SITL cleanup complete")
+    except Exception as e:
+        logger.warning(f"Cleanup warning: {e}")
+
 # ============================================================
 # RUN SERVER
 # ============================================================
 
 if __name__ == "__main__":
     import uvicorn
+    import signal
+    import sys
+
+    # Handle Ctrl+C gracefully
+    def signal_handler(sig, frame):
+        logger.info("\n🛑 Received shutdown signal (Ctrl+C)")
+        logger.info("Cleaning up SITL processes...")
+        import subprocess
+        subprocess.run(['pkill', '-9', '-f', 'arducopter'], stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-9', '-f', 'mavproxy'], stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-9', '-f', 'sim_vehicle.py'], stderr=subprocess.DEVNULL)
+        logger.info("✓ Cleanup complete. Exiting...")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     uvicorn.run(
         "api_server:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        reload=False,  # Disable reload for proper signal handling
         log_level="info"
     )
