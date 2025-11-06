@@ -3,10 +3,11 @@ FastAPI Server for Drone Tuning System
 Provides REST API and WebSocket endpoints for real-time monitoring
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field, ValidationError
 from typing import Dict, List, Optional, Any
 import asyncio
 import json
@@ -73,6 +74,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add validation error handler for debugging
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log and return detailed validation errors"""
+    body = await request.body()
+    logger.error(f"Validation error on {request.method} {request.url}")
+    logger.error(f"Errors: {exc.errors()}")
+    logger.error(f"Body: {body}")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "body": body.decode() if body else None
+        }
+    )
 
 # ============================================================
 # REQUEST/RESPONSE MODELS
@@ -170,11 +187,16 @@ manager = ConnectionManager()
 @app.post("/api/optimization/start", response_model=Dict[str, str])
 async def start_optimization(config: OptimizationConfig):
     """Start a new optimization run"""
-    run_id = str(uuid.uuid4())[:8]
+    try:
+        run_id = str(uuid.uuid4())[:8]
 
-    logger.info(f"Starting optimization run {run_id}")
-    logger.info(f"Algorithm: {config.algorithm}, Phase: {config.phase}")
-    logger.info(f"Generations: {config.generations}, Population: {config.population_size}")
+        logger.info(f"Starting optimization run {run_id}")
+        logger.info(f"Received config: {config.dict()}")
+        logger.info(f"Algorithm: {config.algorithm}, Phase: {config.phase}")
+        logger.info(f"Generations: {config.generations}, Population: {config.population_size}")
+    except Exception as e:
+        logger.error(f"Error in start_optimization: {e}", exc_info=True)
+        raise
 
     # Initialize run state
     active_runs[run_id] = {
