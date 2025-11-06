@@ -745,6 +745,17 @@ async def shutdown_event():
         if active_runs[run_id]['status'] == 'running':
             active_runs[run_id]['status'] = 'stopped'
 
+    # Kill any remaining SITL/MAVProxy processes
+    logger.info("Cleaning up SITL instances...")
+    import subprocess
+    try:
+        subprocess.run(['pkill', '-9', '-f', 'arducopter'], stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-9', '-f', 'mavproxy'], stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-9', '-f', 'sim_vehicle.py'], stderr=subprocess.DEVNULL)
+        logger.info("✓ SITL cleanup complete")
+    except Exception as e:
+        logger.warning(f"Cleanup warning: {e}")
+
 # ============================================================
 # RUN SERVER
 # ============================================================
