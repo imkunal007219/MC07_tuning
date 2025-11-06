@@ -584,53 +584,40 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
             phase_config = OPTIMIZATION_PHASES.get(config.phase, OPTIMIZATION_PHASES['phase1_rate'])
             param_bounds = phase_config['bounds']
 
-            # Create optimizer
+            # Create optimizer with correct parameter names
             if config.algorithm == 'genetic':
                 optimizer = GeneticOptimizer(
                     sitl_manager=sitl_manager,
                     evaluator=evaluator,
-                    max_iterations=config.generations,
-                    population_size=config.population_size,
-                    log_dir=f"flight_logs/{run_id}"
+                    max_generations=config.generations,  # GeneticOptimizer uses max_generations
+                    population_size=config.population_size
                 )
             else:
                 optimizer = BayesianOptimizer(
                     sitl_manager=sitl_manager,
                     evaluator=evaluator,
-                    max_iterations=config.generations,
-                    log_dir=f"flight_logs/{run_id}"
+                    max_iterations=config.generations  # BayesianOptimizer uses max_iterations
                 )
 
-            # Custom callback to broadcast updates
-            def generation_callback(generation, best_fitness, best_params, avg_fitness):
-                # Update state
-                active_runs[run_id]['current_generation'] = generation
-                active_runs[run_id]['best_fitness'] = best_fitness
-                active_runs[run_id]['best_parameters'] = best_params
-                active_runs[run_id]['fitness_history'].append(best_fitness)
-                active_runs[run_id]['avg_fitness_history'].append(avg_fitness)
-                active_runs[run_id]['completed_trials'] += config.population_size
+            # Extract parameter names and bounds
+            parameters = list(param_bounds.keys())
 
-                # Broadcast via WebSocket (need to run in event loop)
-                asyncio.create_task(manager.broadcast(run_id, {
-                    'type': 'generation_complete',
-                    'generation': generation,
-                    'best_fitness': best_fitness,
-                    'avg_fitness': avg_fitness,
-                    'best_parameters': best_params,
-                    'timestamp': datetime.now().isoformat()
-                }))
+            logger.info(f"[{run_id}] Starting optimization for phase: {config.phase}")
+            logger.info(f"[{run_id}] Optimizing {len(parameters)} parameters")
 
-                logger.info(f"[{run_id}] Generation {generation}/{config.generations} - Best: {best_fitness:.4f}")
-
-                # Check for stop signal
-                return active_runs[run_id]['status'] != 'stopped'
-
-            # Run optimization
-            best_params, best_fitness = optimizer.optimize(
-                parameter_bounds=param_bounds,
-                callback=generation_callback
+            # Run optimization (this will block until complete)
+            # Returns: (best_params, best_fitness, convergence_history)
+            best_params, best_fitness, convergence_history = optimizer.optimize(
+                phase_name=config.phase,
+                parameters=parameters,
+                bounds=param_bounds,
+                resume_from=None
             )
+
+            # Update final state after optimization completes
+            active_runs[run_id]['best_parameters'] = best_params
+            active_runs[run_id]['best_fitness'] = best_fitness
+            active_runs[run_id]['fitness_history'] = convergence_history
 
             # Clean up SITL instances
             sitl_manager.shutdown_all()
