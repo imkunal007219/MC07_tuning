@@ -5,6 +5,7 @@ Implements both Genetic Algorithm and Bayesian Optimization
 """
 
 import numpy as np
+import os
 import logging
 from typing import Dict, List, Tuple, Optional, Callable
 from abc import ABC, abstractmethod
