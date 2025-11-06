@@ -130,7 +130,7 @@ class GeneticOptimizer(BaseOptimizer):
         self.use_intelligent_sequencing = use_intelligent_sequencing
         self.test_sequencer = None
         if use_intelligent_sequencing:
-            from config import INTELLIGENT_TEST_SEQUENCING_CONFIG
+            from .config import INTELLIGENT_TEST_SEQUENCING_CONFIG
             self.test_sequencer = IntelligentTestSequencer(
                 min_pass_score=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('min_pass_score', 60.0),
                 enable_optional_tests=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('enable_optional_tests', True),
@@ -711,7 +711,7 @@ class BayesianOptimizer(BaseOptimizer):
         self.use_intelligent_sequencing = use_intelligent_sequencing
         self.test_sequencer = None
         if use_intelligent_sequencing:
-            from config import INTELLIGENT_TEST_SEQUENCING_CONFIG
+            from .config import INTELLIGENT_TEST_SEQUENCING_CONFIG
             self.test_sequencer = IntelligentTestSequencer(
                 min_pass_score=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('min_pass_score', 60.0),
                 enable_optional_tests=INTELLIGENT_TEST_SEQUENCING_CONFIG.get('enable_optional_tests', True),
