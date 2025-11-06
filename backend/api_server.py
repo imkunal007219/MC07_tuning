@@ -553,9 +553,12 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
             logger.info(f"[{run_id}] Using REAL optimization system with ArduPilot SITL")
 
             # Initialize SITL manager and evaluator
+            ardupilot_path = os.path.expanduser("~/MC07_tuning/ardupilot")
+            logger.info(f"[{run_id}] ArduPilot path: {ardupilot_path}")
+
             sitl_manager = SITLManager(
                 num_instances=config.parallel_instances,
-                ardupilot_path=os.path.expanduser("~/Documents/MC07_tuning/ardupilot")
+                ardupilot_path=ardupilot_path
             )
             evaluator = PerformanceEvaluator()
 
