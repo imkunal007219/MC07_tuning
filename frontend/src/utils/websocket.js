@@ -2,10 +2,6 @@
  * WebSocket Manager for real-time updates
  */
 
-import { io } from 'socket.io-client';
-
-const WS_BASE_URL = process.env.REACT_APP_WS_URL || 'http://localhost:8000';
-
 class WebSocketManager {
   constructor() {
     this.socket = null;
@@ -22,26 +18,18 @@ class WebSocketManager {
   }
 
   connect(runId, onConnect) {
-    if (this.socket && this.socket.connected) {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       console.warn('WebSocket already connected');
       return;
     }
 
     this.runId = runId;
-    const wsUrl = `${WS_BASE_URL}/ws/${runId}`;
+    const wsUrl = `ws://localhost:8000/ws/${runId}`;
 
     console.log(`Connecting to WebSocket: ${wsUrl}`);
 
-    this.socket = io(WS_BASE_URL, {
-      path: `/ws/${runId}`,
-      transports: ['websocket'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionAttempts: 5
-    });
-
-    // Use raw WebSocket instead of Socket.IO for FastAPI compatibility
-    this.socket = new WebSocket(wsUrl.replace('http', 'ws'));
+    // Use raw WebSocket (not Socket.IO)
+    this.socket = new WebSocket(wsUrl);
 
     this.socket.onopen = () => {
       console.log('✅ WebSocket connected');
