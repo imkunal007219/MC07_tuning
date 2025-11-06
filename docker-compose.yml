@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database with TimescaleDB extension
+  postgres:
+    image: timescale/timescaledb:latest-pg14
+    container_name: drone-tuning-db
+    environment:
+      POSTGRES_DB: drone_tuning
+      POSTGRES_USER: drone_user
+      POSTGRES_PASSWORD: drone_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - drone-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drone_user -d drone_tuning"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for pub/sub and caching
+  redis:
+    image: redis:7-alpine
+    container_name: drone-tuning-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - drone-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: drone-tuning-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://drone_user:drone_password@postgres:5432/drone_tuning
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ./backend:/app
+      - ./optimization_system:/app/optimization_system
+      - flight_logs:/app/flight_logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - drone-network
+    command: uvicorn api_server:app --host 0.0.0.0 --port 8000 --reload
+
+  # React frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: drone-tuning-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:8000/api
+      REACT_APP_WS_URL: http://localhost:8000
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    depends_on:
+      - backend
+    networks:
+      - drone-network
+    command: npm start
+
+  # NGINX reverse proxy (optional, for production)
+  nginx:
+    image: nginx:alpine
+    container_name: drone-tuning-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - drone-network
+    profiles:
+      - production
+
+networks:
+  drone-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  flight_logs:
