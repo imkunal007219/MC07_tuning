@@ -572,13 +572,6 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
     Integrates with real optimization system or uses mock data
     """
     try:
-        # Update status
-        active_runs[run_id]['status'] = 'running'
-        await manager.broadcast(run_id, {
-            'type': 'status_change',
-            'status': 'running'
-        })
-
         logger.info(f"[{run_id}] Starting optimization with {config.algorithm}")
 
         if OPTIMIZATION_AVAILABLE:
@@ -660,6 +653,14 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
                 progress_callback=initialization_callback
             )
             evaluator = PerformanceEvaluator()
+
+            # SITL initialization complete - change status to running
+            active_runs[run_id]['status'] = 'running'
+            await manager.broadcast(run_id, {
+                'type': 'status_change',
+                'status': 'running'
+            })
+            logger.info(f"[{run_id}] SITL initialization complete - status changed to running")
 
             # Get parameter bounds for the selected phase
             from optimization_system.config import OPTIMIZATION_PHASES
@@ -755,6 +756,33 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
         else:
             # ===== MOCK OPTIMIZATION (DEMO MODE) =====
             logger.info(f"[{run_id}] Using MOCK optimization (DEMO MODE)")
+
+            # Simulate SITL initialization in demo mode
+            logger.info(f"[{run_id}] Simulating SITL initialization...")
+            await manager.broadcast(run_id, {
+                'type': 'initialization_progress',
+                'message': 'Initializing SITL instances (DEMO MODE)...',
+                'current': 0,
+                'total': config.parallel_instances
+            })
+            await asyncio.sleep(2)
+
+            for i in range(config.parallel_instances):
+                await manager.broadcast(run_id, {
+                    'type': 'initialization_progress',
+                    'message': f'SITL instance {i} ready (DEMO) ({i+1}/{config.parallel_instances})',
+                    'current': i + 1,
+                    'total': config.parallel_instances
+                })
+                await asyncio.sleep(1)
+
+            # Initialization complete - change status to running
+            active_runs[run_id]['status'] = 'running'
+            await manager.broadcast(run_id, {
+                'type': 'status_change',
+                'status': 'running'
+            })
+            logger.info(f"[{run_id}] MOCK initialization complete - status changed to running")
 
             for generation in range(config.generations):
                 # Check if paused or stopped
