@@ -282,20 +282,17 @@ class SITLManager:
                     "Tools/autotest/sim_vehicle.py"
                 )
 
-                # Simple working command that matches manual SITL startup
-                # MAVProxy runs automatically and outputs to UDP port 14550 + (instance_id * 10)
-                # We connect via UDP (not TCP) to MAVProxy output port
+                # Headless SITL command - skip MAVProxy entirely
+                # Connect directly to SITL TCP port instead of going through MAVProxy
+                # This is the standard approach for automated testing
                 cmd = [
                     "python3",
                     sim_vehicle_path,
                     "-v", "ArduCopter",
                     "-f", self.frame_type,
-                    # REMOVED --console flag - it tries to open xterm which fails when running through backend
-                    # MAVProxy will still run but without interactive console (headless mode)
+                    "--no-mavproxy",  # Don't start MAVProxy - we'll connect directly to SITL
                     "-I", str(instance_id),  # Instance ID for multi-instance support
                     "--speedup", str(self.speedup),  # Speedup factor
-                    # Let MAVProxy run (don't use --no-mavproxy)
-                    # This matches the working manual command
                 ]
 
                 # Set environment to show SITL terminal for debugging
@@ -328,14 +325,14 @@ class SITLManager:
                 # Store file handles for cleanup
                 self.log_files[instance_id] = (stdout_log, stderr_log)
 
-                # Wait for SITL to boot and MAVProxy to start
+                # Wait for SITL to boot (no MAVProxy in headless mode)
                 logger.debug(f"Waiting for SITL {instance_id} to boot...")
 
-                # MAVProxy outputs to UDP port 14550 + (instance_id * 10)
-                # NOT TCP to SITL port 5760!
-                mavproxy_port = self.base_mavlink_port + instance_id * 10
-                connection_string = f"udp:127.0.0.1:{mavproxy_port}"
-                logger.info(f"Will connect to MAVProxy via {connection_string}")
+                # Connect directly to SITL TCP port (no MAVProxy)
+                # SITL listens on TCP port 5760 + (instance_id * 10)
+                sitl_tcp_port = self.base_sitl_port + instance_id * 10
+                connection_string = f"tcp:127.0.0.1:{sitl_tcp_port}"
+                logger.info(f"Will connect directly to SITL via {connection_string}")
 
                 # Give SITL time to boot before attempting connection
                 logger.info(f"Giving SITL {instance_id} 20 seconds to boot...")
