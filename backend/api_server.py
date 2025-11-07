@@ -3,10 +3,11 @@ FastAPI Server for Drone Tuning System
 Provides REST API and WebSocket endpoints for real-time monitoring
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field, ValidationError
 from typing import Dict, List, Optional, Any
 import asyncio
 import json
@@ -73,6 +74,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add validation error handler for debugging
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log and return detailed validation errors"""
+    body = await request.body()
+    logger.error(f"Validation error on {request.method} {request.url}")
+    logger.error(f"Errors: {exc.errors()}")
+    logger.error(f"Body: {body}")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "body": body.decode() if body else None
+        }
+    )
 
 # ============================================================
 # REQUEST/RESPONSE MODELS
@@ -170,11 +187,16 @@ manager = ConnectionManager()
 @app.post("/api/optimization/start", response_model=Dict[str, str])
 async def start_optimization(config: OptimizationConfig):
     """Start a new optimization run"""
-    run_id = str(uuid.uuid4())[:8]
+    try:
+        run_id = str(uuid.uuid4())[:8]
 
-    logger.info(f"Starting optimization run {run_id}")
-    logger.info(f"Algorithm: {config.algorithm}, Phase: {config.phase}")
-    logger.info(f"Generations: {config.generations}, Population: {config.population_size}")
+        logger.info(f"Starting optimization run {run_id}")
+        logger.info(f"Received config: {config.dict()}")
+        logger.info(f"Algorithm: {config.algorithm}, Phase: {config.phase}")
+        logger.info(f"Generations: {config.generations}, Population: {config.population_size}")
+    except Exception as e:
+        logger.error(f"Error in start_optimization: {e}", exc_info=True)
+        raise
 
     # Initialize run state
     active_runs[run_id] = {
@@ -550,24 +572,47 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
             logger.info(f"[{run_id}] Using REAL optimization system with ArduPilot SITL")
 
             # Initialize SITL manager and evaluator
-            # Try multiple possible ArduPilot locations
+            # Find ArduPilot - try relative path first, then absolute paths
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(script_dir)  # Go up one level from backend/
+
             possible_paths = [
+                os.path.join(project_root, "ardupilot"),  # MC07_tuning/ardupilot
                 os.path.expanduser("~/Documents/MC07_tuning/ardupilot"),
                 os.path.expanduser("~/MC07_tuning/ardupilot"),
                 "/home/user/MC07_tuning/ardupilot"
             ]
 
             ardupilot_path = None
+            arducopter_binary = None
+
             for path in possible_paths:
-                if os.path.exists(os.path.join(path, "build/sitl/bin/arducopter")):
+                binary_path = os.path.join(path, "build/sitl/bin/arducopter")
+                if os.path.exists(binary_path):
                     ardupilot_path = path
+                    arducopter_binary = binary_path
                     logger.info(f"[{run_id}] Found ArduPilot at: {ardupilot_path}")
+                    logger.info(f"[{run_id}] ArduCopter binary: {arducopter_binary}")
                     break
 
             if ardupilot_path is None:
+                # Check if ardupilot directory exists but not built
+                for path in possible_paths:
+                    if os.path.exists(path) and os.path.exists(os.path.join(path, "waf")):
+                        raise FileNotFoundError(
+                            f"ArduPilot found at {path} but not built.\n\n"
+                            f"To build ArduPilot SITL, run:\n"
+                            f"  cd {path}\n"
+                            f"  . ~/.profile\n"
+                            f"  ./waf configure --board sitl\n"
+                            f"  ./waf copter\n\n"
+                            f"This will take 5-10 minutes on first build."
+                        )
+
                 raise FileNotFoundError(
-                    f"ArduPilot not found. Searched:\n" +
-                    "\n".join(f"  - {p}" for p in possible_paths)
+                    f"ArduPilot not found or not built. Searched:\n" +
+                    "\n".join(f"  - {p}" for p in possible_paths) +
+                    "\n\nPlease ensure ArduPilot is cloned and built."
                 )
 
             sitl_manager = SITLManager(
@@ -602,13 +647,48 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
             logger.info(f"[{run_id}] Starting optimization for phase: {config.phase}")
             logger.info(f"[{run_id}] Optimizing {len(parameters)} parameters")
 
+            # Create progress callback that broadcasts WebSocket updates
+            def progress_callback(generation, best_fitness, avg_fitness, best_params):
+                """Callback called after each generation/trial"""
+                try:
+                    # Update state
+                    active_runs[run_id]['current_generation'] = generation
+                    active_runs[run_id]['best_fitness'] = best_fitness
+                    active_runs[run_id]['best_parameters'] = best_params
+                    active_runs[run_id]['fitness_history'].append(best_fitness)
+                    active_runs[run_id]['avg_fitness_history'].append(avg_fitness)
+                    active_runs[run_id]['completed_trials'] += config.population_size if config.algorithm == 'genetic' else 1
+
+                    # Broadcast update to WebSocket clients (use asyncio to schedule)
+                    message = {
+                        'type': 'generation_complete',
+                        'generation': generation,
+                        'best_fitness': best_fitness,
+                        'avg_fitness': avg_fitness,
+                        'best_parameters': best_params,
+                        'timestamp': datetime.now().isoformat()
+                    }
+
+                    # Schedule the async broadcast in the event loop
+                    loop = asyncio.get_event_loop()
+                    asyncio.run_coroutine_threadsafe(
+                        manager.broadcast(run_id, message),
+                        loop
+                    )
+
+                    logger.info(f"[{run_id}] Generation {generation}/{config.generations} - Best: {best_fitness:.4f}")
+
+                except Exception as e:
+                    logger.error(f"[{run_id}] Progress callback error: {e}")
+
             # Run optimization (this will block until complete)
             # Returns: (best_params, best_fitness, convergence_history)
             best_params, best_fitness, convergence_history = optimizer.optimize(
                 phase_name=config.phase,
                 parameters=parameters,
                 bounds=param_bounds,
-                resume_from=None
+                resume_from=None,
+                progress_callback=progress_callback
             )
 
             # Update final state after optimization completes

@@ -74,8 +74,38 @@ function DashboardPage() {
     crossover_rate: 0.7
   });
 
+  // Validate configuration
+  const validateConfig = () => {
+    const errors = [];
+
+    if (config.generations < 1 || config.generations > 1000) {
+      errors.push('Generations must be between 1 and 1000');
+    }
+    if (config.population_size < 4 || config.population_size > 100) {
+      errors.push('Population size must be between 4 and 100');
+    }
+    if (config.parallel_instances < 1 || config.parallel_instances > 20) {
+      errors.push('Parallel instances must be between 1 and 20');
+    }
+    if (config.mutation_rate < 0 || config.mutation_rate > 1) {
+      errors.push('Mutation rate must be between 0.0 and 1.0');
+    }
+    if (config.crossover_rate < 0 || config.crossover_rate > 1) {
+      errors.push('Crossover rate must be between 0.0 and 1.0');
+    }
+
+    return errors;
+  };
+
   // Start optimization
   const handleStart = async () => {
+    // Validate configuration
+    const errors = validateConfig();
+    if (errors.length > 0) {
+      alert('Configuration errors:\n\n' + errors.join('\n'));
+      return;
+    }
+
     try {
       const response = await optimizationAPI.start(config);
       const runId = response.data.run_id;
@@ -125,7 +155,8 @@ function DashboardPage() {
 
     } catch (error) {
       console.error('Failed to start optimization:', error);
-      alert('Failed to start optimization: ' + error.message);
+      const errorMsg = error.response?.data?.detail || error.message;
+      alert('Failed to start optimization:\n\n' + JSON.stringify(errorMsg, null, 2));
     }
   };
 
@@ -349,6 +380,8 @@ function DashboardPage() {
               value={config.generations}
               onChange={(e) => setConfig({ ...config, generations: parseInt(e.target.value) })}
               fullWidth
+              inputProps={{ min: 1, max: 1000 }}
+              helperText="Range: 1-1000 generations"
             />
 
             <TextField
@@ -357,6 +390,9 @@ function DashboardPage() {
               value={config.population_size}
               onChange={(e) => setConfig({ ...config, population_size: parseInt(e.target.value) })}
               fullWidth
+              inputProps={{ min: 4, max: 100 }}
+              helperText="Range: 4-100 individuals (minimum 4 required)"
+              error={config.population_size < 4 || config.population_size > 100}
             />
 
             <TextField
@@ -365,6 +401,8 @@ function DashboardPage() {
               value={config.parallel_instances}
               onChange={(e) => setConfig({ ...config, parallel_instances: parseInt(e.target.value) })}
               fullWidth
+              inputProps={{ min: 1, max: 20 }}
+              helperText="Range: 1-20 SITL instances"
             />
           </Box>
         </DialogContent>
