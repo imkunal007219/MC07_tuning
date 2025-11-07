@@ -290,7 +290,8 @@ class SITLManager:
                     sim_vehicle_path,
                     "-v", "ArduCopter",
                     "-f", self.frame_type,
-                    "--console",  # Open MAVProxy console in separate xterm window
+                    # REMOVED --console flag - it tries to open xterm which fails when running through backend
+                    # MAVProxy will still run but without interactive console (headless mode)
                     "-I", str(instance_id),  # Instance ID for multi-instance support
                     "--speedup", str(self.speedup),  # Speedup factor
                     # Let MAVProxy run (don't use --no-mavproxy)
@@ -307,18 +308,25 @@ class SITLManager:
                 cmd_quoted = [f'"{arg}"' if ' ' in arg else arg for arg in cmd]
                 profile_cmd = f'. "$HOME/.profile" && {" ".join(cmd_quoted)}'
 
-                # Start SITL process WITHOUT capturing output
-                # This allows MAVProxy console to be visible in terminal/xterm window
-                # Don't capture stdout/stderr so we can see MAVProxy console
+                # Create log files for SITL output
+                stdout_log = open(f'/tmp/sitl_stdout_{instance_id}.log', 'w')
+                stderr_log = open(f'/tmp/sitl_stderr_{instance_id}.log', 'w')
+
+                # Start SITL process with output redirected to log files
+                # This allows us to debug issues while running headless
                 instance.process = subprocess.Popen(
                     profile_cmd,
                     shell=True,
                     executable='/bin/bash',  # Use bash instead of sh
                     cwd=work_dir,
                     env=env,
-                    # No stdout/stderr redirection - let output go to console
+                    stdout=stdout_log,
+                    stderr=stderr_log,
                     preexec_fn=os.setsid  # Create new process group
                 )
+
+                # Store file handles for cleanup
+                self.log_files[instance_id] = (stdout_log, stderr_log)
 
                 # Wait for SITL to boot and MAVProxy to start
                 logger.debug(f"Waiting for SITL {instance_id} to boot...")
@@ -825,8 +833,14 @@ class SITLManager:
                 logger.warning(f"Error killing instance {instance.instance_id}: {e}")
                 # Continue to next instance
 
-        # No log files to close since we're not capturing output
+        # Close log files
         if hasattr(self, 'log_files'):
+            for instance_id, (stdout_log, stderr_log) in self.log_files.items():
+                try:
+                    stdout_log.close()
+                    stderr_log.close()
+                except Exception as e:
+                    logger.warning(f"Error closing log files for instance {instance_id}: {e}")
             self.log_files.clear()
 
         # Nuclear cleanup: kill ANY remaining SITL/MAVProxy processes
