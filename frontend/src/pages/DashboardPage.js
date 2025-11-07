@@ -64,6 +64,8 @@ function DashboardPage() {
 
   // Local state
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
+  const [initializationMessage, setInitializationMessage] = useState('');
+  const [initializationProgress, setInitializationProgress] = useState({ current: 0, total: 0 });
   const [config, setConfig] = useState({
     algorithm: 'genetic',
     phase: 'phase1_rate',
@@ -111,9 +113,13 @@ function DashboardPage() {
       const runId = response.data.run_id;
 
       dispatch(setCurrentRun(runId));
-      dispatch(setStatus('running'));
+      dispatch(setStatus('initializing')); // Changed from 'running' to 'initializing'
       dispatch(resetOptimization());
       dispatch(updateProgress({ totalGenerations: config.generations }));
+
+      // Reset initialization state
+      setInitializationMessage('Connecting to backend...');
+      setInitializationProgress({ current: 0, total: config.parallel_instances });
 
       // Connect to WebSocket
       wsManager.connect(runId, () => {
@@ -139,6 +145,11 @@ function DashboardPage() {
 
       wsManager.on('status_change', (data) => {
         dispatch(setStatus(data.status));
+      });
+
+      wsManager.on('initialization_progress', (data) => {
+        setInitializationMessage(data.message);
+        setInitializationProgress({ current: data.current, total: data.total });
       });
 
       wsManager.on('optimization_complete', (data) => {
@@ -233,7 +244,7 @@ function DashboardPage() {
           color="primary"
           startIcon={<PlayArrow />}
           onClick={() => setConfigDialogOpen(true)}
-          disabled={status === 'running' || status === 'paused'}
+          disabled={status === 'initializing' || status === 'running' || status === 'paused'}
         >
           Start New Optimization
         </Button>
@@ -287,6 +298,7 @@ function DashboardPage() {
       {status !== 'idle' && (
         <Alert
           severity={
+            status === 'initializing' ? 'info' :
             status === 'running' ? 'info' :
             status === 'paused' ? 'warning' :
             status === 'completed' ? 'success' : 'error'
@@ -296,7 +308,36 @@ function DashboardPage() {
           <Typography variant="body1" fontWeight="bold">
             Status: {status.toUpperCase()}
           </Typography>
-          {currentRun && (
+
+          {/* Show initialization progress */}
+          {status === 'initializing' && (
+            <Box sx={{ mt: 1 }}>
+              <Typography variant="body2">
+                {initializationMessage}
+              </Typography>
+              {initializationProgress.total > 0 && (
+                <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
+                  <Box sx={{ width: '100%', mr: 1 }}>
+                    <Box
+                      sx={{
+                        width: `${(initializationProgress.current / initializationProgress.total) * 100}%`,
+                        height: 8,
+                        bgcolor: 'primary.main',
+                        borderRadius: 1,
+                        transition: 'width 0.3s ease'
+                      }}
+                    />
+                  </Box>
+                  <Typography variant="body2" color="text.secondary">
+                    {initializationProgress.current}/{initializationProgress.total}
+                  </Typography>
+                </Box>
+              )}
+            </Box>
+          )}
+
+          {/* Show optimization progress */}
+          {currentRun && status !== 'initializing' && (
             <Typography variant="body2">
               Run ID: {currentRun} | Generation: {progress.currentGeneration}/{progress.totalGenerations} |
               Trials: {progress.completedTrials}

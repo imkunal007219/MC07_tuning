@@ -42,7 +42,7 @@ class SITLManager:
 
     def __init__(self, num_instances: int = 10, speedup: int = 1,
                  ardupilot_path: str = None, frame_type: str = "drone-30kg",
-                 pre_start: bool = True):
+                 pre_start: bool = True, progress_callback=None):
         """
         Initialize SITL Manager
 
@@ -52,10 +52,12 @@ class SITLManager:
             ardupilot_path: Path to ArduPilot directory
             frame_type: Frame type to use (drone-30kg for our custom frame)
             pre_start: If True, start all SITL instances immediately in parallel
+            progress_callback: Optional callback for initialization progress updates
         """
         self.num_instances = num_instances
         self.speedup = speedup
         self.frame_type = frame_type
+        self.progress_callback = progress_callback
 
         # Determine ArduPilot path
         if ardupilot_path is None:
@@ -125,9 +127,15 @@ class SITLManager:
         logger.info(f"Initialized {len(self.instances)} instances")
 
     def _pre_start_all_instances(self):
-        """Start all SITL instances in parallel for faster initialization"""
-        logger.info(f"Pre-starting all {self.num_instances} SITL instances in parallel...")
-        logger.info("This will take ~40-60 seconds. Please wait...")
+        """
+        Start all SITL instances with staggering for better system load management
+        Starts instances in batches of 3 to avoid overwhelming the system
+        """
+        logger.info(f"Pre-starting {self.num_instances} SITL instances with staggering...")
+        logger.info("Starting in batches of 3 to manage system load...")
+
+        # Batch size for staggering
+        batch_size = 3
 
         def start_worker(instance_id: int) -> Tuple[int, bool]:
             """Worker to start a single instance"""
@@ -144,28 +152,70 @@ class SITLManager:
                 logger.error(f"✗ Instance {instance_id} failed with exception: {e}")
                 return (instance_id, False)
 
-        # Start all instances in parallel
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         start_time = time.time()
         successful = 0
         failed = 0
+        total_instances = self.num_instances
 
-        with ThreadPoolExecutor(max_workers=self.num_instances) as executor:
-            futures = {
-                executor.submit(start_worker, i): i
-                for i in range(self.num_instances)
-            }
+        # Send initial progress update
+        if self.progress_callback:
+            self.progress_callback(
+                message="Initializing SITL instances...",
+                current=0,
+                total=total_instances
+            )
 
-            for future in as_completed(futures):
-                instance_id, success = future.result()
-                if success:
-                    successful += 1
-                else:
-                    failed += 1
+        # Start instances in batches
+        for batch_start in range(0, total_instances, batch_size):
+            batch_end = min(batch_start + batch_size, total_instances)
+            batch_instances = range(batch_start, batch_end)
+
+            logger.info(f"Starting batch: instances {batch_start} to {batch_end-1}")
+
+            # Send progress update for batch start
+            if self.progress_callback:
+                self.progress_callback(
+                    message=f"Starting SITL instances {batch_start+1}-{batch_end} of {total_instances}...",
+                    current=successful,
+                    total=total_instances
+                )
+
+            # Start batch in parallel
+            with ThreadPoolExecutor(max_workers=batch_size) as executor:
+                futures = {
+                    executor.submit(start_worker, i): i
+                    for i in batch_instances
+                }
+
+                for future in as_completed(futures):
+                    instance_id, success = future.result()
+                    if success:
+                        successful += 1
+                    else:
+                        failed += 1
+
+                    # Send progress update for each instance
+                    if self.progress_callback:
+                        self.progress_callback(
+                            message=f"SITL instance {instance_id} {'ready' if success else 'failed'} ({successful}/{total_instances})",
+                            current=successful + failed,
+                            total=total_instances
+                        )
+
+            # Small delay between batches to let system stabilize
+            if batch_end < total_instances:
+                time.sleep(2)
 
         elapsed = time.time() - start_time
         logger.info(f"Pre-start complete in {elapsed:.1f}s: {successful} successful, {failed} failed")
+
+        # Send final progress update
+        if self.progress_callback:
+            self.progress_callback(
+                message=f"All SITL instances initialized ({successful} successful, {failed} failed)",
+                current=total_instances,
+                total=total_instances
+            )
 
         if failed > 0:
             logger.warning(f"⚠ {failed} instances failed to start - optimization will use {successful} instances")

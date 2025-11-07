@@ -6,6 +6,9 @@ class WebSocketManager {
   constructor() {
     this.socket = null;
     this.runId = null;
+    this.retryCount = 0;
+    this.maxRetries = 5;
+    this.retryTimeout = null;
     this.callbacks = {
       generation_complete: [],
       trial_complete: [],
@@ -13,7 +16,8 @@ class WebSocketManager {
       status_change: [],
       optimization_complete: [],
       error: [],
-      initial_state: []
+      initial_state: [],
+      initialization_progress: []
     };
   }
 
@@ -24,15 +28,25 @@ class WebSocketManager {
     }
 
     this.runId = runId;
-    const wsUrl = `ws://localhost:8000/ws/${runId}`;
+    this.retryCount = 0;
+    this._attemptConnect(onConnect);
+  }
 
-    console.log(`Connecting to WebSocket: ${wsUrl}`);
+  _attemptConnect(onConnect) {
+    const wsUrl = `ws://localhost:8000/ws/${this.runId}`;
+
+    console.log(`Connecting to WebSocket: ${wsUrl} (Attempt ${this.retryCount + 1}/${this.maxRetries + 1})`);
 
     // Use raw WebSocket (not Socket.IO)
     this.socket = new WebSocket(wsUrl);
 
     this.socket.onopen = () => {
-      console.log('✅ WebSocket connected');
+      console.log('✅ WebSocket connected successfully');
+      this.retryCount = 0; // Reset retry count on success
+      if (this.retryTimeout) {
+        clearTimeout(this.retryTimeout);
+        this.retryTimeout = null;
+      }
       if (onConnect) onConnect();
     };
 
@@ -47,19 +61,43 @@ class WebSocketManager {
 
     this.socket.onerror = (error) => {
       console.error('WebSocket error:', error);
-      this.trigger('error', { message: 'WebSocket connection error' });
     };
 
-    this.socket.onclose = () => {
-      console.log('WebSocket disconnected');
+    this.socket.onclose = (event) => {
+      console.log('WebSocket disconnected', event.code, event.reason);
+
+      // Attempt retry if we haven't exceeded max retries
+      if (this.retryCount < this.maxRetries) {
+        // Exponential backoff: 2s, 4s, 8s, 16s, 32s
+        const delay = Math.pow(2, this.retryCount + 1) * 1000;
+        this.retryCount++;
+
+        console.log(`⏳ Retrying WebSocket connection in ${delay/1000}s... (${this.retryCount}/${this.maxRetries})`);
+
+        this.retryTimeout = setTimeout(() => {
+          this._attemptConnect(onConnect);
+        }, delay);
+      } else {
+        console.error('❌ WebSocket connection failed after maximum retries');
+        this.trigger('error', {
+          message: 'WebSocket connection failed after maximum retries. Backend may be initializing SITL instances.'
+        });
+      }
     };
   }
 
   disconnect() {
+    // Clear any pending retry timeout
+    if (this.retryTimeout) {
+      clearTimeout(this.retryTimeout);
+      this.retryTimeout = null;
+    }
+
     if (this.socket) {
       this.socket.close();
       this.socket = null;
       this.runId = null;
+      this.retryCount = 0;
       console.log('WebSocket disconnected');
     }
   }

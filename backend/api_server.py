@@ -200,7 +200,7 @@ async def start_optimization(config: OptimizationConfig):
 
     # Initialize run state
     active_runs[run_id] = {
-        'status': 'starting',
+        'status': 'initializing',  # Changed from 'starting' to 'initializing'
         'config': config.dict(),
         'start_time': datetime.now().isoformat(),
         'current_generation': 0,
@@ -210,16 +210,17 @@ async def start_optimization(config: OptimizationConfig):
         'avg_fitness_history': [],
         'completed_trials': 0,
         'trial_results': [],
-        'phase_history': []
+        'phase_history': [],
+        'optimization_started': False  # Flag to prevent duplicate starts
     }
 
-    # Start optimization in background using asyncio.create_task (true async)
-    asyncio.create_task(run_optimization(run_id, config))
+    # DON'T start optimization yet - wait for WebSocket connection
+    # The WebSocket endpoint will start optimization after connection is established
 
     return {
         "run_id": run_id,
-        "status": "started",
-        "message": f"Optimization {run_id} started successfully"
+        "status": "initializing",
+        "message": f"Optimization {run_id} initialized, waiting for WebSocket connection"
     }
 
 @app.get("/api/optimization/{run_id}/status", response_model=OptimizationStatus)
@@ -333,6 +334,7 @@ async def websocket_endpoint(websocket: WebSocket, run_id: str):
     - trial_complete: { trial_id, fitness, parameters, crashed }
     - new_best: { fitness, parameters }
     - status_change: { status }
+    - initialization_progress: { message, current, total }
     - error: { message }
     """
     await manager.connect(run_id, websocket)
@@ -350,6 +352,18 @@ async def websocket_endpoint(websocket: WebSocket, run_id: str):
                     'fitness_history': active_runs[run_id]['fitness_history']
                 }
             })
+
+            # Start optimization if status is 'initializing' and not already started
+            if active_runs[run_id]['status'] == 'initializing' and not active_runs[run_id].get('optimization_started', False):
+                active_runs[run_id]['optimization_started'] = True
+                logger.info(f"[{run_id}] WebSocket connected, starting optimization")
+
+                # Parse config from dict back to OptimizationConfig
+                config_dict = active_runs[run_id]['config']
+                config = OptimizationConfig(**config_dict)
+
+                # Start optimization in background
+                asyncio.create_task(run_optimization(run_id, config))
 
         # Keep connection alive and handle client messages
         while True:
@@ -615,9 +629,35 @@ async def run_optimization(run_id: str, config: OptimizationConfig):
                     "\n\nPlease ensure ArduPilot is cloned and built."
                 )
 
+            # Create initialization progress callback for WebSocket updates
+            def initialization_callback(message: str, current: int, total: int):
+                """Callback for SITL initialization progress"""
+                try:
+                    # Broadcast initialization progress to WebSocket clients
+                    progress_message = {
+                        'type': 'initialization_progress',
+                        'message': message,
+                        'current': current,
+                        'total': total
+                    }
+
+                    # Schedule the async broadcast in the event loop
+                    loop = asyncio.get_event_loop()
+                    asyncio.run_coroutine_threadsafe(
+                        manager.broadcast(run_id, progress_message),
+                        loop
+                    )
+
+                    logger.info(f"[{run_id}] Initialization: {message} ({current}/{total})")
+
+                except Exception as e:
+                    logger.error(f"[{run_id}] Initialization callback error: {e}")
+
+            # Create SITL manager with progress callback
             sitl_manager = SITLManager(
                 num_instances=config.parallel_instances,
-                ardupilot_path=ardupilot_path
+                ardupilot_path=ardupilot_path,
+                progress_callback=initialization_callback
             )
             evaluator = PerformanceEvaluator()
 

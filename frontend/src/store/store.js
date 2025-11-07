@@ -13,12 +13,12 @@ const optimizationSlice = createSlice({
   name: 'optimization',
   initialState: {
     currentRun: null,
-    status: 'idle', // 'idle', 'running', 'paused', 'completed', 'failed', 'stopped'
+    status: 'idle', // 'idle', 'running', 'paused', 'completed', 'failed', 'stopped', 'initializing'
     progress: {
       currentGeneration: 0,
       totalGenerations: 100,
       completedTrials: 0,
-      estimatedTimeRemaining: null
+      estimatedTimeRemaining: 0
     },
     fitnessHistory: [],
     avgFitnessHistory: [],
@@ -74,7 +74,7 @@ const optimizationSlice = createSlice({
         currentGeneration: 0,
         totalGenerations: 100,
         completedTrials: 0,
-        estimatedTimeRemaining: null
+        estimatedTimeRemaining: 0
       };
     }
   }
