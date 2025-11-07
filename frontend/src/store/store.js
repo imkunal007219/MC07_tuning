@@ -13,7 +13,7 @@ const optimizationSlice = createSlice({
   name: 'optimization',
   initialState: {
     currentRun: null,
-    status: 'idle', // 'idle', 'running', 'paused', 'completed', 'failed', 'stopped'
+    status: 'idle', // 'idle', 'connecting', 'running', 'paused', 'completed', 'failed', 'stopped'
     progress: {
       currentGeneration: 0,
       totalGenerations: 100,

@@ -81,18 +81,23 @@ function DashboardPage() {
       const runId = response.data.run_id;
 
       dispatch(setCurrentRun(runId));
-      dispatch(setStatus('running'));
+      // Set status to 'connecting' instead of 'running' to avoid race condition
+      dispatch(setStatus('connecting'));
       dispatch(resetOptimization());
       dispatch(updateProgress({ totalGenerations: config.generations }));
 
-      // Connect to WebSocket
+      // Connect to WebSocket FIRST before assuming status
       wsManager.connect(runId, () => {
         console.log('WebSocket connected for run:', runId);
+        // Request current status after connection is established
+        wsManager.send('get_status');
       });
 
       // Register event handlers
       wsManager.on('initial_state', (data) => {
+        // Set status based on backend's actual state
         dispatch(setInitialState(data.data));
+        console.log('Received initial state from backend:', data.data.status);
       });
 
       wsManager.on('generation_complete', (data) => {
@@ -189,6 +194,51 @@ function DashboardPage() {
     };
   }, [currentRun]);
 
+  // Polling fallback mechanism - polls status if WebSocket isn't connected
+  useEffect(() => {
+    let pollInterval;
+
+    // Only poll if we have a run and either:
+    // 1. WebSocket is not connected, OR
+    // 2. Status is 'connecting' (waiting for actual status from backend)
+    if (currentRun && (!wsManager.isConnected() || status === 'connecting')) {
+      console.log('Starting status polling fallback (WebSocket not ready)');
+
+      pollInterval = setInterval(async () => {
+        try {
+          const response = await optimizationAPI.getStatus(currentRun);
+          const statusData = response.data;
+
+          // Update Redux state with polled data
+          dispatch(setStatus(statusData.status));
+          dispatch(updateProgress({
+            currentGeneration: statusData.current_generation,
+            completedTrials: statusData.completed_trials,
+            estimatedTimeRemaining: statusData.estimated_time_remaining
+          }));
+          dispatch(updateFitness({ bestFitness: statusData.best_fitness }));
+          dispatch(updateBestParameters(statusData.best_parameters));
+
+          console.log('Status polled:', statusData.status);
+
+          // Stop polling if status is terminal
+          if (['completed', 'failed', 'stopped'].includes(statusData.status)) {
+            clearInterval(pollInterval);
+          }
+        } catch (error) {
+          console.error('Failed to poll status:', error);
+        }
+      }, 2000); // Poll every 2 seconds
+    }
+
+    return () => {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        console.log('Stopped status polling');
+      }
+    };
+  }, [currentRun, status, dispatch]);
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
@@ -202,7 +252,7 @@ function DashboardPage() {
           color="primary"
           startIcon={<PlayArrow />}
           onClick={() => setConfigDialogOpen(true)}
-          disabled={status === 'running' || status === 'paused'}
+          disabled={status === 'running' || status === 'paused' || status === 'connecting'}
         >
           Start New Optimization
         </Button>
@@ -257,6 +307,7 @@ function DashboardPage() {
         <Alert
           severity={
             status === 'running' ? 'info' :
+            status === 'connecting' ? 'info' :
             status === 'paused' ? 'warning' :
             status === 'completed' ? 'success' : 'error'
           }
